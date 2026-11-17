@@ -118,7 +118,13 @@ class _Runner:
             if adapter is None:
                 self.result.errors.append(f"{site_id}: enabled site has no adapter")
                 continue
-            self._process_site(site_id, site_cfg, adapter)
+            try:
+                self._process_site(site_id, site_cfg, adapter)
+            except StateError as exc:
+                # A corrupt value in one site's state must not abort the other
+                # sites or discard the state already accumulated for this run;
+                # the final save still persists counters notified earlier.
+                self.result.errors.append(f"{site_id}: state error: {exc}")
 
     def _process_site(
         self, site_id: str, site_cfg: SiteConfig, adapter: SiteAdapter
@@ -144,7 +150,7 @@ class _Runner:
             # First run for this site: register the existing catalogue without
             # pushing individual listings.
             self.result.bootstrap = True
-            _mark_newly_seen(site_state, listings, self.now)
+            mark_seen(site_state, listings, self.now)
             if self.config.bootstrap_notify:
                 text = _BOOTSTRAP_TEMPLATE.format(count=len(listings))
                 self._send_text_all(text, f"{site_id}: bootstrap notification failed")
@@ -181,7 +187,7 @@ class _Runner:
         self.result.new += len(actionable)
 
         if not actionable:
-            _mark_newly_seen(site_state, listings, self.now)
+            mark_seen(site_state, listings, self.now)
             return
 
         if not self.notifiers:
@@ -191,7 +197,7 @@ class _Runner:
                     "no notification channels"
                 )
                 return
-            _mark_newly_seen(site_state, listings, self.now)
+            mark_seen(site_state, listings, self.now)
             return
 
         failed = False
@@ -203,7 +209,7 @@ class _Runner:
                 failed = True
 
         if not failed:
-            _mark_newly_seen(site_state, listings, self.now)
+            mark_seen(site_state, listings, self.now)
 
     # -- channel calls ----------------------------------------------------
 
@@ -366,28 +372,24 @@ class _Runner:
         return healthy
 
 
-def _mark_newly_seen(
-    site_state: dict[str, Any], listings: list[Listing], now: datetime
-) -> None:
-    """Record every fetched ID, keeping the timestamp of already-seen IDs.
-
-    Refreshing existing timestamps would make the state differ on every run and
-    force a commit every five minutes; only genuinely new IDs are substantive.
-    """
-    seen = site_state["seen"]
-    unseen = [item for item in listings if item.item_id not in seen]
-    if unseen:
-        mark_seen(site_state, unseen, now)
-
-
 def _fingerprint(state: dict[str, Any]) -> str:
-    """Return a deterministic digest of *state*, ignoring per-site ``last_run``."""
+    """Return a deterministic digest of *state*.
+
+    Per-site ``last_run`` and the timestamps inside ``seen`` are ignored: they
+    are refreshed on every run and are not substantive changes.  ``seen`` is
+    compared by its ID keys only, so pruning an entry (or registering a new ID)
+    is still detected while a timestamp refresh alone does not force a commit.
+    """
     clone = copy.deepcopy(state)
     sites = clone.get("sites")
     if isinstance(sites, dict):
         for site_state in sites.values():
-            if isinstance(site_state, dict):
-                site_state.pop("last_run", None)
+            if not isinstance(site_state, dict):
+                continue
+            site_state.pop("last_run", None)
+            seen = site_state.get("seen")
+            if isinstance(seen, dict):
+                site_state["seen"] = sorted(seen)
     return json.dumps(clone, sort_keys=True, ensure_ascii=False)
 
 

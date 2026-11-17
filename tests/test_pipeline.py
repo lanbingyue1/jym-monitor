@@ -6,7 +6,7 @@ import pytest
 from monitor.config import (Config, SiteConfig, Filters, NotifyConfig, AlertConfig)
 from monitor.models import Listing
 from monitor.pipeline import run_once
-from monitor.state import new_state, FileStateStore
+from monitor.state import new_state, FileStateStore, ensure_site
 from monitor.errors import FetchError, NotifyError, StateError
 
 NOW = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
@@ -369,3 +369,66 @@ def test_state_load_error_propagates():
     with pytest.raises(StateError):
         run_once(cfg(), [FakeAdapter([listing("1")])], [FakeNotifier()],
                  BrokenLoadStore(), now=NOW)
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: per-site state errors and full seen registration
+# ---------------------------------------------------------------------------
+
+def test_steady_state_seen_timestamp_refresh_does_not_save():
+    store = RecordingStore(); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+    saves = store.save_calls
+    first_ts = store.state["sites"]["jiaoyimao"]["seen"]["1"]
+    r = run_once(cfg(), [FakeAdapter([listing("1")])], [n], store,
+                 now=NOW + timedelta(minutes=5))
+    assert r.new == 0
+    assert store.save_calls == saves
+    # mark_seen refreshed the in-memory timestamp, but no save happened.
+    assert store.state["sites"]["jiaoyimao"]["seen"]["1"] == first_ts
+
+
+def test_continuously_listed_item_not_pruned_or_renotified():
+    store = RecordingStore()
+    state = new_state()
+    site = ensure_site(state, "jiaoyimao", NOW - timedelta(days=90))
+    site["seen"] = {"1793": (NOW - timedelta(days=61)).isoformat()}
+    store.state = state
+
+    n = FakeNotifier()
+    old = listing("1793", published=NOW - timedelta(days=80))
+    r1 = run_once(cfg(), [FakeAdapter([old])], [n], store, now=NOW)
+    assert r1.new == 0 and n.items == []
+    assert "1793" in store.state["sites"]["jiaoyimao"]["seen"]
+
+    r2 = run_once(cfg(), [FakeAdapter([old])], [n], store,
+                  now=NOW + timedelta(minutes=5))
+    assert r2.new == 0 and n.items == []
+
+
+def test_corrupt_site_timestamp_does_not_abort_other_sites():
+    store = RecordingStore()
+    state = new_state()
+    broken = ensure_site(state, "broken", NOW)
+    broken["last_alert_at"] = "not-a-timestamp"
+    store.state = state
+
+    class BrokenSiteAdapter(FailingAdapter):
+        site_id = "broken"
+
+    c = Config(
+        sites={
+            "broken": SiteConfig("broken", True, ("u",), 1, Filters()),
+            "jiaoyimao": SiteConfig("jiaoyimao", True, ("u",), 1, Filters()),
+        },
+        notify=NotifyConfig(("feishu",), 10),
+        alerts=AlertConfig(1, 180), bootstrap_notify=True)
+    n = FakeNotifier()
+    r = run_once(c, [BrokenSiteAdapter(), FakeAdapter([listing("1")])], [n],
+                 store, now=NOW)
+
+    assert any("broken" in e and "state" in e for e in r.errors)
+    assert r.bootstrap is True
+    assert "1" in store.state["sites"]["jiaoyimao"]["seen"]
+    assert store.state["sites"]["broken"]["consecutive_failures"] == 1
+    assert store.save_calls == 1
