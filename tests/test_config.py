@@ -74,3 +74,26 @@ def test_malformed_yaml_raises_value_error(tmp_path: Path):
     p.write_text("sites: [unclosed", encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(p)
+
+
+def test_empty_urls_raise_value_error_naming_site_and_field(tmp_path: Path):
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "sites:\n  jiaoyimao:\n    urls: []\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_config(p)
+    message = str(excinfo.value)
+    assert "jiaoyimao" in message and "urls" in message
+
+
+def test_zero_max_pages_raises_value_error_naming_site_and_field(tmp_path: Path):
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "sites:\n  jiaoyimao:\n    urls: [u]\n    max_pages: 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_config(p)
+    message = str(excinfo.value)
+    assert "jiaoyimao" in message and "max_pages" in message

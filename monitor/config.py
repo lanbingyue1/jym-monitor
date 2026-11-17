@@ -111,12 +111,27 @@ def _section(raw: Mapping[str, Any], name: str) -> Mapping[str, Any]:
 def _parse_site(site_id: str, raw: Any) -> SiteConfig:
     if not isinstance(raw, dict):
         raise ValueError(f"site '{site_id}' must be a mapping")
+    urls = _as_tuple(raw.get("urls"), f"sites.{site_id}.urls")
+    if not urls:
+        raise ValueError(f"site '{site_id}' field 'urls' must not be empty")
+
+    max_pages = raw.get("max_pages", 3)
+    if isinstance(max_pages, bool) or not isinstance(max_pages, int):
+        raise ValueError(
+            f"site '{site_id}' field 'max_pages' must be a positive integer"
+        )
+    if max_pages <= 0:
+        raise ValueError(
+            f"site '{site_id}' field 'max_pages' must be a positive integer, "
+            f"got {max_pages}"
+        )
+
     filters_raw = _section(raw, "filters")
     return SiteConfig(
         site_id=site_id,
         enabled=raw.get("enabled", True),
-        urls=_as_tuple(raw.get("urls"), f"sites.{site_id}.urls"),
-        max_pages=raw.get("max_pages", 3),
+        urls=urls,
+        max_pages=max_pages,
         filters=Filters(
             price_min=filters_raw.get("price_min"),
             price_max=filters_raw.get("price_max"),
