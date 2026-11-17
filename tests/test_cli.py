@@ -16,6 +16,7 @@ from monitor.state import new_state
 
 CONFIG = "sites:\n  jiaoyimao:\n    enabled: true\n    urls: [u]\n"
 CONFIG_WITH_NOTIFY = CONFIG + "notify:\n  channels: [feishu]\n"
+CONFIG_WITH_UNKNOWN_SITE = "sites:\n  other:\n    enabled: true\n    urls: [u]\n"
 
 SEEDED_STATE = {
     "version": 1,
@@ -164,6 +165,34 @@ def test_dry_run_prints_would_notify_items(monkeypatch, tmp_path, capsys):
     assert state_path.read_text(encoding="utf-8") == before
 
 
+def test_dry_run_corrupt_state_exits_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [])
+    path = write_config(tmp_path)
+    state_path = tmp_path / "s.json"
+    state_path.write_text("{not json", encoding="utf-8")
+
+    code = cli.main(
+        ["--config", str(path), "--dry-run"], env={"STATE_FILE": str(state_path)}
+    )
+
+    output = output_of(capsys)
+    assert code == 1
+    assert "状态读取失败" in output
+    assert "invalid JSON" in output
+
+
+def test_dry_run_unknown_site_exits_1(tmp_path, capsys):
+    path = write_config(tmp_path, CONFIG_WITH_UNKNOWN_SITE)
+
+    code = cli.main(
+        ["--config", str(path), "--dry-run"],
+        env={"STATE_FILE": str(tmp_path / "s.json")},
+    )
+
+    assert code == 1
+    assert "unsupported site: other" in output_of(capsys)
+
+
 def test_dry_run_ignores_errors_and_skips_summary_and_ping(
     monkeypatch, tmp_path, capsys
 ):
@@ -205,6 +234,18 @@ def test_real_run_requires_token_and_repository(monkeypatch, tmp_path, capsys):
     assert "GITHUB_REPOSITORY" in output_of(capsys)
 
 
+def test_real_run_unknown_site_exits_1(tmp_path, capsys):
+    path = write_config(tmp_path, CONFIG_WITH_UNKNOWN_SITE)
+
+    code = cli.main(
+        ["--config", str(path)],
+        env={"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "owner/repo"},
+    )
+
+    assert code == 1
+    assert "unsupported site: other" in output_of(capsys)
+
+
 def test_notifier_config_error_exits_1(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "build_adapters", lambda cfg: [FakeAdapter()])
 
@@ -243,6 +284,33 @@ def test_state_load_failure_exits_1(monkeypatch, tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # Real-run summary, ping and exit status
 # ---------------------------------------------------------------------------
+
+
+def test_state_load_failure_writes_failure_summary(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [])
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [])
+    monkeypatch.setattr(
+        cli, "GitHubStateStore", lambda repo, token, branch="state": BrokenLoadStore()
+    )
+    pinged = []
+    monkeypatch.setattr(cli, "ping", lambda url: pinged.append(url))
+    path = write_config(tmp_path)
+    summary = tmp_path / "summary.md"
+
+    code = cli.main(
+        ["--config", str(path)],
+        env={
+            "GITHUB_TOKEN": "t",
+            "GITHUB_REPOSITORY": "owner/repo",
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "HEALTHCHECK_PING_URL": "https://hc/1",
+        },
+    )
+
+    assert code == 1
+    text = summary.read_text(encoding="utf-8")
+    assert "状态读写失败" in text and "disk" in text
+    assert pinged == []
 
 
 def test_real_run_writes_summary_and_pings(monkeypatch, tmp_path):

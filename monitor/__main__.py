@@ -61,7 +61,13 @@ def _dry_run(config: Config, env: Mapping[str, str]) -> int:
     """Fetch and report without notifying, writing state or touching secrets."""
     store = FileStateStore(env.get("STATE_FILE", _DEFAULT_STATE_FILE))
     try:
-        result = run_once(config, build_adapters(config), [], store, dry_run=True)
+        adapters = build_adapters(config)
+    except ConfigError as exc:
+        print(f"站点配置失败: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        result = run_once(config, adapters, [], store, dry_run=True)
     except StateError as exc:
         print(f"状态读取失败: {exc}", file=sys.stderr)
         return 1
@@ -91,6 +97,12 @@ def _real_run(config: Config, env: Mapping[str, str]) -> int:
         print(f"通知渠道配置失败: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        adapters = build_adapters(config)
+    except ConfigError as exc:
+        print(f"站点配置失败: {exc}", file=sys.stderr)
+        return 1
+
     store = GitHubStateStore(
         env["GITHUB_REPOSITORY"],
         env["GITHUB_TOKEN"],
@@ -99,20 +111,18 @@ def _real_run(config: Config, env: Mapping[str, str]) -> int:
 
     started = time.monotonic()
     try:
-        result = run_once(config, build_adapters(config), notifiers, store)
+        result = run_once(config, adapters, notifiers, store)
     except StateError as exc:
-        print(f"状态读写失败: {exc}", file=sys.stderr)
+        message = f"状态读写失败: {exc}"
+        print(message, file=sys.stderr)
+        _write_summary(
+            env.get("GITHUB_STEP_SUMMARY"),
+            _render_failure_summary(message, time.monotonic() - started),
+        )
         return 1
     elapsed = time.monotonic() - started
 
-    summary_path = env.get("GITHUB_STEP_SUMMARY")
-    if summary_path:
-        try:
-            Path(summary_path).write_text(
-                _render_summary(result, elapsed), encoding="utf-8"
-            )
-        except OSError as exc:
-            print(f"写入 GITHUB_STEP_SUMMARY 失败: {exc}", file=sys.stderr)
+    _write_summary(env.get("GITHUB_STEP_SUMMARY"), _render_summary(result, elapsed))
 
     if not result.errors:
         ping(env.get("HEALTHCHECK_PING_URL"))
@@ -157,6 +167,31 @@ def _render_summary(result: RunResult, elapsed: float) -> str:
     else:
         lines.append("- 无")
     return "\n".join(lines) + "\n"
+
+
+def _render_failure_summary(message: str, elapsed: float) -> str:
+    """Render a minimal summary for a run that failed before producing a result."""
+    return (
+        "## 交易猫监控摘要\n\n"
+        "- 抓取：0\n"
+        "- 新增：0\n"
+        "- 通知：0\n"
+        "- 降级（浏览器）：否\n"
+        f"- 耗时：{elapsed:.2f}s\n"
+        "- 错误：1\n\n"
+        "### 错误详情\n\n"
+        f"- {message}\n"
+    )
+
+
+def _write_summary(path: str | None, text: str) -> None:
+    """Write the step summary when configured; a write failure is printed."""
+    if not path:
+        return
+    try:
+        Path(path).write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"写入 GITHUB_STEP_SUMMARY 失败: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
