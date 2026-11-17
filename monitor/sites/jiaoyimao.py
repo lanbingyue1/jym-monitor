@@ -69,6 +69,13 @@ def fetch_html(url: str, session: requests.Session | None = None) -> str:
     raise FetchError(f"could not fetch {url}") from last_exc
 
 
+def _ensure_browser_response_ok(response, url: str) -> None:
+    """Raise ``FetchError`` when a browser navigation did not return 2xx."""
+    if response is None or not response.ok:
+        status = "none" if response is None else response.status
+        raise FetchError(f"browser navigation failed for {url} (HTTP status {status})")
+
+
 def fetch_with_browser(url: str) -> str:
     """Fetch *url* with a real Chrome via Playwright as an anti-bot fallback."""
     from playwright.sync_api import sync_playwright
@@ -83,11 +90,12 @@ def fetch_with_browser(url: str) -> str:
             try:
                 page = browser.new_page()
                 page.add_init_script(_WEBDRIVER_INIT_SCRIPT)
-                page.goto(
+                response = page.goto(
                     url,
                     wait_until="domcontentloaded",
                     timeout=_BROWSER_TIMEOUT_MILLIS,
                 )
+                _ensure_browser_response_ok(response, url)
                 time.sleep(_BROWSER_WAIT_SECONDS)
                 html = page.content()
             finally:
