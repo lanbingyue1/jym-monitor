@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -40,6 +41,9 @@ from monitor.state import (
 _SITE_ALERT_PREFIX = "[监控异常]"
 _BOOTSTRAP_TEMPLATE = "监控已启动，当前 {count} 条商品"
 _BOOTSTRAP_SUBJECT = "交易猫监控已启动"
+# Detail pages are fetched one by one and may each fall back to a browser.
+# Bound the phase so a blocked network cannot exhaust the workflow timeout.
+_ENRICH_DEADLINE_SECONDS = 120.0
 
 
 @dataclass
@@ -52,6 +56,7 @@ class RunResult:
     bootstrap: bool = False
     used_browser: bool = False
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     alerts_sent: int = 0
     would_notify: tuple[Listing, ...] = ()
 
@@ -161,7 +166,7 @@ class _Runner:
                     subject=_BOOTSTRAP_SUBJECT,
                 )
         else:
-            self._notify_new(site_id, site_cfg, site_state, listings)
+            self._notify_new(site_id, site_cfg, adapter, site_state, listings)
 
             if getattr(adapter, "saturated", False):
                 self._site_alert(
@@ -185,11 +190,13 @@ class _Runner:
         self,
         site_id: str,
         site_cfg: SiteConfig,
+        adapter: SiteAdapter,
         site_state: dict[str, Any],
         listings: list[Listing],
     ) -> None:
         new_items = [item for item in listings if is_new(item, site_state)]
         actionable = [item for item in new_items if matches(item, site_cfg.filters)]
+        actionable = self._enrich(site_id, adapter, actionable)
         self.result.new += len(actionable)
         self.result.would_notify += tuple(actionable)
 
@@ -217,6 +224,40 @@ class _Runner:
 
         if not failed:
             mark_seen(site_state, listings, self.now)
+
+    def _enrich(
+        self, site_id: str, adapter: SiteAdapter, items: list[Listing]
+    ) -> list[Listing]:
+        """Fill in detail-page data (安全报告) for the listings about to notify.
+
+        Enrichment is best-effort: a failing detail page is recorded as a
+        warning and the listing is delivered with search-page data only.
+        """
+        fetch_detail = getattr(adapter, "fetch_detail", None)
+        if fetch_detail is None or self.dry_run or not items:
+            return items
+
+        enriched: list[Listing] = []
+        started = time.monotonic()
+        for item in items:
+            if time.monotonic() - started > _ENRICH_DEADLINE_SECONDS:
+                skipped = len(items) - len(enriched)
+                self.result.warnings.append(
+                    f"{site_id}: detail enrichment exceeded "
+                    f"{_ENRICH_DEADLINE_SECONDS:.0f}s; {skipped} item(s) sent "
+                    "without 安全报告"
+                )
+                enriched.extend(items[len(enriched):])
+                break
+            try:
+                enriched.append(fetch_detail(item))
+            except FetchError as exc:
+                self.result.warnings.append(
+                    f"{site_id}: detail fetch failed for {item.item_id}: {exc}"
+                )
+                enriched.append(item)
+        self._note_browser(adapter)
+        return enriched
 
     # -- channel calls ----------------------------------------------------
 

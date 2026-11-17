@@ -627,3 +627,264 @@ def test_build_notifiers_rejects_unknown_channel():
     cfg = NotifyConfig(channels=("slack",), batch_size=10)
     with pytest.raises(ConfigError):
         build_notifiers(cfg, {})
+
+
+# ---------------------------------------------------------------------------
+# Rich listing content: images, account, seller note, safety report
+# ---------------------------------------------------------------------------
+
+from monitor.models import SafeReport
+
+RICH = Listing(
+    "jiaoyimao",
+    "1794841605849819",
+    "【极忍忍阶】血影，卫鲤",
+    50,
+    "https://www.jiaoyimao.com/jg1008016/1794841605849819.html",
+    PUBLISHED,
+    {
+        "server": "和之国",
+        "platform": "安卓",
+        "account": "小米帐号",
+        "description": "血影全皮，有通行证",
+        "sell_points": "极忍",
+    },
+    ("https://img.test/1.jpg", "https://img.test/2.jpg"),
+    SafeReport(
+        "SSS",
+        "100%",
+        "100% 不会被找回",
+        ("卖家信用认证：身份证认证 认证通过", "交易安全保障：账号转移 是"),
+    ),
+)
+
+
+def test_feishu_card_includes_account_seller_note_and_report(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook").send([RICH])
+
+    content = sent["json"]["card"]["elements"][0]["text"]["content"]
+    assert "账号：小米帐号" in content
+    assert "平台：安卓" in content
+    assert "服务器：和之国" in content
+    assert "特点：极忍" in content
+    assert "卖家说：血影全皮，有通行证" in content
+    assert "安全报告：SSS 100%（100% 不会被找回）" in content
+    assert "卖家信用认证：身份证认证 认证通过" in content
+    assert "交易安全保障：账号转移 是" in content
+
+
+def test_feishu_renders_image_links_without_app_credentials(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook").send([RICH])
+
+    elements = sent["json"]["card"]["elements"]
+    assert len(elements) == 2
+    assert elements[1]["text"]["tag"] == "lark_md"
+    content = elements[1]["text"]["content"]
+    assert "[图1](https://img.test/1.jpg)" in content
+    assert "[图2](https://img.test/2.jpg)" in content
+
+
+class FakeDownload:
+    def __init__(self, status_code=200, content=b"jpeg-bytes"):
+        self.status_code = status_code
+        self.content = content
+
+
+def test_feishu_uploads_images_when_app_credentials_given(monkeypatch):
+    posts = []
+    downloads = []
+
+    def fake_get(url, timeout=None):
+        downloads.append(url)
+        return FakeDownload()
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        posts.append({"url": url, "json": json, **kwargs})
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={
+                    "code": 0,
+                    "tenant_access_token": "t-1",
+                    "expire": 7200,
+                }
+            )
+        if "im/v1/image/create" in url:
+            key = f"img-{len([p for p in posts if 'image/create' in p['url']])}"
+            return FakeResponse(payload={"code": 0, "data": {"image_key": key}})
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([RICH])
+
+    assert downloads == ["https://img.test/1.jpg", "https://img.test/2.jpg"]
+    uploads = [p for p in posts if "image/create" in p["url"]]
+    assert len(uploads) == 2
+    assert uploads[0]["headers"] == {"Authorization": "Bearer t-1"}
+    assert uploads[0]["data"] == {"image_type": "message"}
+    webhook = posts[-1]
+    elements = webhook["json"]["card"]["elements"]
+    images = [e for e in elements if e.get("tag") == "img"]
+    assert [e["img_key"] for e in images] == ["img-1", "img-2"]
+    assert all("text" not in e for e in images)
+
+
+def test_feishu_falls_back_to_links_when_upload_fails(monkeypatch, capsys):
+    sent = {}
+
+    def boom(url, timeout=None):
+        raise requests.ConnectionError("down")
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", boom)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([RICH])
+
+    elements = sent["json"]["card"]["elements"]
+    assert [e for e in elements if e.get("tag") == "img"] == []
+    assert "[图1](https://img.test/1.jpg)" in elements[1]["text"]["content"]
+    assert "上传失败" in capsys.readouterr().err
+
+
+def test_feishu_keeps_links_for_images_beyond_inline_limit(monkeypatch):
+    sent = {}
+
+    def fake_get(url, timeout=None):
+        return FakeDownload()
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        if "image/create" in url:
+            return FakeResponse(payload={"code": 0, "data": {"image_key": "k"}})
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    many = Listing(
+        "jiaoyimao", "9", "多图", 1, "https://x.test/9", None, {},
+        tuple(f"https://img.test/{i}.jpg" for i in range(1, 12)),
+    )
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([many])
+
+    elements = sent["json"]["card"]["elements"]
+    assert len([e for e in elements if e.get("tag") == "img"]) == 9
+    links = elements[-1]["text"]["content"]
+    assert "[图10](https://img.test/10.jpg)" in links
+    assert "[图11](https://img.test/11.jpg)" in links
+    assert "[图1]" not in links
+
+
+def test_build_feishu_notifier_rejects_partial_app_credentials():
+    cfg = NotifyConfig(channels=("feishu",), batch_size=10)
+    with pytest.raises(ConfigError):
+        build_notifiers(
+            cfg, {"FEISHU_WEBHOOK": "https://hook", "FEISHU_APP_ID": "cli_x"}
+        )
+    with pytest.raises(ConfigError):
+        build_notifiers(
+            cfg, {"FEISHU_WEBHOOK": "https://hook", "FEISHU_APP_SECRET": "s"}
+        )
+
+
+def test_build_feishu_notifier_accepts_app_credentials():
+    cfg = NotifyConfig(channels=("feishu",), batch_size=10)
+    notifiers = build_notifiers(
+        cfg,
+        {
+            "FEISHU_WEBHOOK": "https://hook",
+            "FEISHU_APP_ID": "cli_x",
+            "FEISHU_APP_SECRET": "s",
+        },
+    )
+    assert len(notifiers) == 1
+
+
+def test_email_body_includes_account_note_report_and_images(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+
+    EmailNotifier("smtp.qq.com", 465, "u", "p", "me@example.com").send([RICH])
+
+    body = message_body(created[0].message)
+    assert "账号：小米帐号" in body
+    assert "特点：极忍" in body
+    assert "卖家说：血影全皮，有通行证" in body
+    assert "安全报告：SSS 100%（100% 不会被找回）" in body
+    assert "卖家信用认证：身份证认证 认证通过" in body
+    assert "图片1：https://img.test/1.jpg" in body
+    assert "图片2：https://img.test/2.jpg" in body
+
+    html_body = message_part(created[0].message, "html")
+    assert "<th>账号</th>" in html_body
+    assert "小米帐号" in html_body
+    assert 'href="https://img.test/1.jpg"' in html_body
+    assert "卖家说：血影全皮，有通行证" in html_body
+
+
+def test_feishu_retries_without_inline_images_when_card_rejected(
+    monkeypatch, capsys
+):
+    posts = []
+
+    def fake_get(url, timeout=None):
+        return FakeDownload()
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        if "image/create" in url:
+            return FakeResponse(payload={"code": 0, "data": {"image_key": "bad"}})
+        posts.append(json)
+        has_img = any(e.get("tag") == "img" for e in json["card"]["elements"])
+        return FakeResponse(
+            payload={"code": 230001, "msg": "invalid image_key"} if has_img else None
+        )
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([RICH])
+
+    assert len(posts) == 2
+    assert any(e.get("tag") == "img" for e in posts[0]["card"]["elements"])
+    retry = posts[1]["card"]["elements"]
+    assert not any(e.get("tag") == "img" for e in retry)
+    assert "[图1](https://img.test/1.jpg)" in retry[1]["text"]["content"]
+    assert "改用链接重试" in capsys.readouterr().err

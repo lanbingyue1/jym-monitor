@@ -447,3 +447,83 @@ def test_corrupt_site_timestamp_does_not_abort_other_sites():
     assert "1" in store.state["sites"]["jiaoyimao"]["seen"]
     assert store.state["sites"]["broken"]["consecutive_failures"] == 1
     assert store.save_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Detail-page enrichment (安全报告)
+# ---------------------------------------------------------------------------
+
+class EnrichingAdapter(FakeAdapter):
+    def __init__(self, items, enriched, fail_ids=()):
+        super().__init__(items)
+        self.enriched = enriched
+        self.fail_ids = set(fail_ids)
+        self.detail_calls = []
+
+    def fetch_detail(self, item):
+        self.detail_calls.append(item.item_id)
+        if item.item_id in self.fail_ids:
+            raise FetchError("detail blocked")
+        return self.enriched[item.item_id]
+
+
+def _enriched(i):
+    from monitor.models import SafeReport
+    return Listing(
+        "jiaoyimao", i, f"商品{i}", 100, f"https://x/{i}", NOW,
+        {"server": "和之国", "platform": "安卓", "account": "小米帐号"},
+        ("https://img.test/a.jpg",),
+        SafeReport("SSS", "100%", "100% 不会被找回", ("卖家信用认证：认证通过",)),
+    )
+
+
+def test_new_items_are_enriched_before_notifying(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter(
+        [listing("1"), listing("2")], {"2": _enriched("2")}
+    )
+    r = run_once(cfg(), [adapter], [n], store, now=NOW + timedelta(minutes=5))
+
+    assert adapter.detail_calls == ["2"]
+    assert r.new == 1 and r.warnings == []
+    assert n.items[0].safe_report.level == "SSS"
+    assert n.items[0].images == ("https://img.test/a.jpg",)
+
+
+def test_detail_failure_warns_but_still_notifies(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter([listing("1"), listing("2")], {}, fail_ids={"2"})
+    r = run_once(cfg(), [adapter], [n], store, now=NOW + timedelta(minutes=5))
+
+    assert r.errors == []
+    assert len(r.warnings) == 1 and "detail" in r.warnings[0]
+    assert [x.item_id for x in n.items] == ["2"]
+    assert n.items[0].safe_report is None
+    assert "2" in store.load()["sites"]["jiaoyimao"]["seen"]
+
+
+def test_bootstrap_does_not_fetch_details(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    adapter = EnrichingAdapter([listing("1")], {"1": _enriched("1")})
+
+    run_once(cfg(), [adapter], [n], store, now=NOW)
+
+    assert adapter.detail_calls == []
+
+
+def test_dry_run_does_not_fetch_details(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter(
+        [listing("1"), listing("2")], {"2": _enriched("2")}
+    )
+    r = run_once(cfg(), [adapter], [n], store, now=NOW + timedelta(minutes=5),
+                 dry_run=True)
+
+    assert adapter.detail_calls == []
+    assert [x.item_id for x in r.would_notify] == ["2"]

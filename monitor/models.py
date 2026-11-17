@@ -8,6 +8,22 @@ from typing import Mapping
 
 
 @dataclass(frozen=True)
+class SafeReport:
+    """The marketplace's account safety report for one listing.
+
+    ``groups`` holds ready-to-render lines such as
+    ``"卖家信用认证：身份证认证 认证通过 / 人脸认证 认证通过"``.  The report is
+    only available on the product detail page, so listings fetched from the
+    search page carry ``safe_report=None`` until they are enriched.
+    """
+
+    level: str = ""
+    percent: str = ""
+    note: str = ""
+    groups: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Listing:
     """A normalized marketplace listing."""
 
@@ -18,3 +34,5 @@ class Listing:
     url: str
     published_at: datetime | None
     extra: Mapping[str, str] = field(default_factory=dict)
+    images: tuple[str, ...] = ()
+    safe_report: SafeReport | None = None

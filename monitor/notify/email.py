@@ -8,7 +8,13 @@ from email.message import EmailMessage
 
 from monitor.errors import NotifyError
 from monitor.models import Listing
-from monitor.notify.base import published_text
+from monitor.notify.base import (
+    extra_value,
+    published_text,
+    safe_report_lines,
+    sell_points_text,
+    seller_note,
+)
 
 SMTP_TIMEOUT = 20
 ALERT_SUBJECT = "[监控异常] 交易猫监控"
@@ -87,13 +93,6 @@ def _price_text(item: Listing) -> str:
     return "价格未知" if item.price is None else f"¥{item.price}"
 
 
-def _extra_text(item: Listing, key: str) -> str:
-    value = item.extra.get(key)
-    if value is None or value == "":
-        return "未知"
-    return str(value)
-
-
 def _plain_body(items: list[Listing]) -> str:
     lines: list[str] = []
     for item in items:
@@ -103,9 +102,19 @@ def _plain_body(items: list[Listing]) -> str:
         if published:
             lines.append(f"上架时间：{published}")
         lines.append(
-            f"服务器：{_extra_text(item, 'server')}"
-            f" · 平台：{_extra_text(item, 'platform')}"
+            f"账号：{extra_value(item, 'account')}"
+            f" · 平台：{extra_value(item, 'platform')}"
+            f" · 服务器：{extra_value(item, 'server')}"
         )
+        points = sell_points_text(item)
+        if points:
+            lines.append(f"特点：{points}")
+        note = seller_note(item)
+        if note:
+            lines.append(f"卖家说：{note}")
+        lines.extend(safe_report_lines(item.safe_report))
+        for index, url in enumerate(item.images, 1):
+            lines.append(f"图片{index}：{url}")
         lines.append(item.url)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -113,6 +122,7 @@ def _plain_body(items: list[Listing]) -> str:
 
 def _html_body(items: list[Listing]) -> str:
     rows: list[str] = []
+    details: list[str] = []
     # Only add the 上架时间 column when at least one item has a publication
     # time; unknown times render as an empty cell rather than a placeholder.
     show_published = any(item.published_at is not None for item in items)
@@ -134,10 +144,13 @@ def _html_body(items: list[Listing]) -> str:
             f"<td>{title}</td>"
             f"<td>{html.escape(_price_text(item))}</td>"
             f"{published_cell}"
-            f"<td>{html.escape(_extra_text(item, 'server'))}</td>"
-            f"<td>{html.escape(_extra_text(item, 'platform'))}</td>"
+            f"<td>{html.escape(extra_value(item, 'account'))}</td>"
+            f"<td>{html.escape(extra_value(item, 'server'))}</td>"
+            f"<td>{html.escape(extra_value(item, 'platform'))}</td>"
             "</tr>"
         )
+        details.append(_html_details(item))
+
     published_header = "<th>上架时间</th>" if show_published else ""
     return (
         "<html><body>"
@@ -145,8 +158,31 @@ def _html_body(items: list[Listing]) -> str:
         '<table border="1" cellpadding="4" cellspacing="0">'
         "<thead><tr><th>标题</th><th>价格</th>"
         f"{published_header}"
-        "<th>服务器</th><th>平台</th></tr></thead>"
+        "<th>账号</th><th>服务器</th><th>平台</th></tr></thead>"
         "<tbody>"
         + "".join(rows)
-        + "</tbody></table></body></html>"
+        + "</tbody></table>"
+        + "".join(details)
+        + "</body></html>"
     )
+
+
+def _html_details(item: Listing) -> str:
+    """Render the fields that do not fit the summary table."""
+    parts: list[str] = [f"<h3>{html.escape(item.title)}</h3>"]
+
+    points = sell_points_text(item)
+    if points:
+        parts.append(f"<p>特点：{html.escape(points)}</p>")
+    note = seller_note(item)
+    if note:
+        parts.append(f"<p>卖家说：{html.escape(note)}</p>")
+    for line in safe_report_lines(item.safe_report):
+        parts.append(f"<p>{html.escape(line)}</p>")
+    if item.images:
+        links = " ".join(
+            f'<a href="{html.escape(url, quote=True)}">图{index}</a>'
+            for index, url in enumerate(item.images, 1)
+        )
+        parts.append(f"<p>图片：{links}</p>")
+    return "".join(parts) if len(parts) > 1 else ""

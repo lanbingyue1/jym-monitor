@@ -18,7 +18,19 @@ def build_notifiers(cfg: NotifyConfig, env: Mapping[str, str]) -> list[Notifier]
     notifiers: list[Notifier] = []
     for channel in cfg.channels:
         if channel == "feishu":
-            notifiers.append(FeishuNotifier(_require(env, "FEISHU_WEBHOOK")))
+            app_id = env.get("FEISHU_APP_ID") or None
+            app_secret = env.get("FEISHU_APP_SECRET") or None
+            if bool(app_id) != bool(app_secret):
+                raise ConfigError(
+                    "FEISHU_APP_ID and FEISHU_APP_SECRET must be set together"
+                )
+            notifiers.append(
+                FeishuNotifier(
+                    _require(env, "FEISHU_WEBHOOK"),
+                    app_id=app_id,
+                    app_secret=app_secret,
+                )
+            )
         elif channel == "email":
             host = _require(env, "SMTP_HOST")
             port_raw = _require(env, "SMTP_PORT")

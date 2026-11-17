@@ -124,6 +124,9 @@ def _real_run(config: Config, env: Mapping[str, str]) -> int:
 
     _write_summary(env.get("GITHUB_STEP_SUMMARY"), _render_summary(result, elapsed))
 
+    for warning in result.warnings:
+        print(f"警告: {warning}", file=sys.stderr)
+
     if not result.errors:
         ping(env.get("HEALTHCHECK_PING_URL"))
     else:
@@ -142,6 +145,7 @@ def _counters(result: RunResult) -> dict[str, object]:
         "bootstrap": result.bootstrap,
         "used_browser": result.used_browser,
         "errors": list(result.errors),
+        "warnings": list(result.warnings),
         "alerts_sent": result.alerts_sent,
     }
 
@@ -158,6 +162,7 @@ def _render_summary(result: RunResult, elapsed: float) -> str:
         f"- 首次运行：{'是' if result.bootstrap else '否'}",
         f"- 耗时：{elapsed:.2f}s",
         f"- 错误：{len(result.errors)}",
+        f"- 警告：{len(result.warnings)}",
         "",
         "### 错误详情",
         "",
@@ -166,6 +171,9 @@ def _render_summary(result: RunResult, elapsed: float) -> str:
         lines.extend(f"- {error}" for error in result.errors)
     else:
         lines.append("- 无")
+    if result.warnings:
+        lines.extend(["", "### 警告详情", ""])
+        lines.extend(f"- {warning}" for warning in result.warnings)
     return "\n".join(lines) + "\n"
 
 

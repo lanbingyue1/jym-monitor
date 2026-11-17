@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from typing import Callable
 from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
@@ -18,11 +20,12 @@ import requests
 
 from monitor.config import SiteConfig
 from monitor.errors import FetchError
-from monitor.models import Listing
+from monitor.models import Listing, SafeReport
 
 SITE = "jiaoyimao"
 PAGE_SIZE = 16
 PAGE_SLEEP_SECONDS = 1.5
+DETAIL_SLEEP_SECONDS = 1.0
 
 _INITIAL_DATA_MARKER = "window.__INITIAL_DATA__"
 _PUNISH_SCAN_LIMIT = 6000
@@ -155,7 +158,7 @@ def parse_listings(html: str) -> list[Listing]:
     return listings
 
 
-def _extract_goods_list(html: str) -> list:
+def _decode_initial_data(html: str) -> dict:
     marker_at = html.find(_INITIAL_DATA_MARKER)
     if marker_at == -1:
         raise ValueError("window.__INITIAL_DATA__ not found")
@@ -169,6 +172,13 @@ def _extract_goods_list(html: str) -> list:
         payload, _ = json.JSONDecoder().raw_decode(raw)
     except ValueError as exc:
         raise ValueError("could not decode window.__INITIAL_DATA__") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("unexpected window.__INITIAL_DATA__ structure")
+    return payload
+
+
+def _extract_goods_list(html: str) -> list:
+    payload = _decode_initial_data(html)
 
     try:
         goods_list = payload["pageInitialProps"]["initialData"]["goodsListData"]["goodsList"]
@@ -178,6 +188,84 @@ def _extract_goods_list(html: str) -> list:
     if not isinstance(goods_list, list):
         raise ValueError("goodsList is not a list")
     return goods_list
+
+
+def parse_detail_report(html: str) -> SafeReport | None:
+    """Return the 安全报告 from a jiaoyimao product detail page.
+
+    Returns ``None`` when the page is parseable but has no safety report.
+    Raises ``ValueError`` when the page is not a detail page.
+    """
+    payload = _decode_initial_data(html)
+
+    try:
+        components = payload["pageInitialProps"]["initialData"]["goodsData"][
+            "sortedComponents"
+        ]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("unexpected window.__INITIAL_DATA__ structure") from exc
+    if not isinstance(components, list):
+        raise ValueError("sortedComponents is not a list")
+
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        biz = component.get("itemPageBizViewData")
+        if not isinstance(biz, dict):
+            continue
+        report = _to_safe_report(biz.get("safeReport"))
+        if report is not None:
+            return report
+    return None
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain_text(raw: object) -> str:
+    """Strip the inline markup the marketplace embeds in label strings."""
+    return unescape(_TAG_RE.sub("", str(raw or ""))).strip()
+
+
+def _to_safe_report(raw: object) -> SafeReport | None:
+    if not isinstance(raw, dict):
+        return None
+
+    level_raw = raw.get("safeLevel")
+    level_raw = level_raw if isinstance(level_raw, dict) else {}
+    content_raw = raw.get("safeContent")
+    content_raw = content_raw if isinstance(content_raw, dict) else {}
+
+    groups: list[str] = []
+    content_list = content_raw.get("contentList")
+    for group in content_list if isinstance(content_list, list) else []:
+        if not isinstance(group, dict):
+            continue
+        steps = []
+        for step in group.get("data") or []:
+            if not isinstance(step, dict):
+                continue
+            text = str(step.get("text") or "").strip()
+            status = str(step.get("statusText") or "").strip()
+            if text and status:
+                steps.append(f"{text} {status}")
+            elif text:
+                steps.append(text)
+        if not steps:
+            continue
+        title = str(group.get("title") or "").strip()
+        line = " / ".join(steps)
+        groups.append(f"{title}：{line}" if title else line)
+
+    report = SafeReport(
+        level=str(level_raw.get("level") or "").strip(),
+        percent=str(level_raw.get("levelPercentText") or "").strip(),
+        note=_plain_text(level_raw.get("descHtml")),
+        groups=tuple(groups),
+    )
+    if not (report.level or report.percent or report.note or report.groups):
+        return None
+    return report
 
 
 def _normalize_price(value: object) -> int | None:
@@ -201,13 +289,33 @@ def _normalize_price(value: object) -> int | None:
     return None
 
 
+def _image_urls(data: dict) -> tuple[str, ...]:
+    images = data.get("images")
+    if not isinstance(images, list):
+        return ()
+    urls: list[str] = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        url = image.get("originImage") or image.get("auditImage")
+        if url:
+            urls.append(str(url))
+    return tuple(urls)
+
+
 def _to_listing(data: dict) -> Listing:
     goods_id = str(data["goodsId"])
 
     sell_points = data.get("sellPoints") or []
+    category = data.get("category")
     extra = {
         "server": data.get("serverName") or "",
         "platform": data.get("newPlatformName") or "",
+        "account": (
+            str(category.get("categoryName") or "")
+            if isinstance(category, dict)
+            else ""
+        ),
         "description": data.get("description") or "",
         "sell_points": " ".join(
             str(point.get("desc", ""))
@@ -224,6 +332,7 @@ def _to_listing(data: dict) -> Listing:
         url=data.get("detailUrl") or _DETAIL_URL_TEMPLATE.format(goods_id=goods_id),
         published_at=parse_published_at(goods_id),
         extra=extra,
+        images=_image_urls(data),
     )
 
 
@@ -302,6 +411,24 @@ class JiaoyimaoAdapter:
 
             if page == self.cfg.max_pages and len(page_items) == PAGE_SIZE:
                 self.saturated = True
+
+    def fetch_detail(self, item: Listing) -> Listing:
+        """Return *item* enriched with the detail page's 安全报告.
+
+        Raises ``FetchError`` when the detail page cannot be fetched or
+        parsed; the caller decides whether to keep the unenriched listing.
+        """
+        time.sleep(DETAIL_SLEEP_SECONDS)
+        html = self._fetch_page(item.url)
+        try:
+            report = parse_detail_report(html)
+        except ValueError as exc:
+            raise FetchError(
+                f"could not parse detail page {item.url}: {exc}"
+            ) from exc
+        if report is None:
+            return item
+        return replace(item, safe_report=report)
 
     def _fetch_page(self, url: str) -> str:
         try:

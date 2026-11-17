@@ -1,5 +1,6 @@
 """Tests for the jiaoyimao adapter: pagination, dedup and browser fallback."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,9 @@ from monitor.sites.jiaoyimao import JiaoyimaoAdapter
 
 FIXTURE_HTML = (
     Path(__file__).parent / "fixtures" / "jiaoyimao_list.html"
+).read_text(encoding="utf-8")
+DETAIL_HTML = (
+    Path(__file__).parent / "fixtures" / "jiaoyimao_detail.html"
 ).read_text(encoding="utf-8")
 KNOWN_ID = "1793434810016540"
 BASE_URL = "https://example.com/list"
@@ -252,6 +256,88 @@ def test_flags_reset_at_the_start_of_each_fetch():
     assert a.used_browser is True and a.saturated is True
     a.fetch(known_ids=frozenset({KNOWN_ID}))
     assert a.used_browser is False and a.saturated is False
+
+
+def _detail_adapter(htmls, calls, browser_calls=None):
+    def http_fetch(url):
+        calls.append(url)
+        return htmls[min(len(calls) - 1, len(htmls) - 1)]
+
+    return JiaoyimaoAdapter(
+        SiteConfig(
+            site_id="jiaoyimao",
+            enabled=True,
+            urls=(BASE_URL,),
+            max_pages=1,
+            filters=Filters(),
+        ),
+        http_fetch=http_fetch,
+        browser_fetch=lambda url: (browser_calls or []).append(url) or DETAIL_HTML,
+    )
+
+
+def test_fetch_detail_enriches_listing(sleeps):
+    from monitor.models import Listing
+
+    calls = []
+    item = Listing(
+        "jiaoyimao",
+        "1794841605849819",
+        "【极忍忍阶】血影，卫鲤",
+        50,
+        "https://www.jiaoyimao.com/jg1008016/1794841605849819.html",
+        None,
+        {"server": "和之国", "platform": "安卓", "account": "小米帐号"},
+        ("https://img.test/1.jpg",),
+    )
+    adapter = _detail_adapter([DETAIL_HTML], calls)
+
+    enriched = adapter.fetch_detail(item)
+
+    assert calls == [item.url]
+    assert sleeps == [1.0]
+    assert enriched.item_id == item.item_id
+    assert enriched.images == item.images
+    assert enriched.extra == item.extra
+    assert enriched.safe_report is not None
+    assert enriched.safe_report.level == "SSS"
+
+
+def test_fetch_detail_without_report_returns_item_unchanged():
+    from monitor.models import Listing
+
+    payload = {"pageInitialProps": {"initialData": {"goodsData": {
+        "sortedComponents": [{"componentKey": "ItemTextIntro"}]
+    }}}}
+    html = "<script>window.__INITIAL_DATA__=" + json.dumps(payload) + ";</script>"
+    item = Listing("jiaoyimao", "1", "t", 1, "https://x.test/1", None, {})
+    adapter = _detail_adapter([html], [])
+
+    assert adapter.fetch_detail(item) is item
+
+
+def test_fetch_detail_unparseable_page_raises_fetch_error():
+    from monitor.models import Listing
+
+    def shell(url):
+        return "<html><body>shell</body></html>"
+
+    adapter = JiaoyimaoAdapter(
+        SiteConfig(
+            site_id="jiaoyimao",
+            enabled=True,
+            urls=(BASE_URL,),
+            max_pages=1,
+            filters=Filters(),
+        ),
+        http_fetch=shell,
+        browser_fetch=shell,
+    )
+    item = Listing("jiaoyimao", "1", "t", 1, "https://x.test/1", None, {})
+
+    with pytest.raises(FetchError, match="INITIAL_DATA"):
+        adapter.fetch_detail(item)
+    assert adapter.used_browser is True
 
 
 def test_build_adapters_constructs_enabled_jiaoyimao():
