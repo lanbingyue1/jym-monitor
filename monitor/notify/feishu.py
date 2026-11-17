@@ -22,6 +22,7 @@ _CARD_TITLE = "交易猫新品提醒"
 _TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 _IMAGE_URL = "https://open.feishu.cn/open-apis/im/v1/image/create"
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_DOWNLOAD_ATTEMPTS = 2
 _INLINE_IMAGE_LIMIT = 9
 # Uploads are sequential HTTP round-trips; cap the whole card so a large burst
 # of new listings cannot stall the workflow.
@@ -226,12 +227,25 @@ class FeishuImageUploader:
         return key
 
     def _download(self, url: str) -> bytes:
-        try:
-            response = requests.get(url, timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise NotifyError(
-                f"image download failed: {type(exc).__name__}"
-            ) from exc
+        response = None
+        error = NotifyError("image download failed")
+        for _ in range(_DOWNLOAD_ATTEMPTS):
+            try:
+                response = requests.get(url, timeout=self.timeout)
+                break
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                # The image CDN occasionally drops cross-border connections;
+                # one retry recovers most of these transient timeouts.
+                error = NotifyError(
+                    f"image download failed: {type(exc).__name__}"
+                )
+                response = None
+            except requests.RequestException as exc:
+                raise NotifyError(
+                    f"image download failed: {type(exc).__name__}"
+                ) from exc
+        if response is None:
+            raise error
         if not 200 <= response.status_code < 300:
             raise NotifyError(f"image download returned HTTP {response.status_code}")
         content = response.content

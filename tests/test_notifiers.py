@@ -746,6 +746,44 @@ def test_feishu_uploads_images_when_app_credentials_given(monkeypatch):
     assert all("text" not in e for e in images)
 
 
+def test_feishu_retries_image_download_after_connect_timeout(monkeypatch):
+    attempts = []
+    sent = {}
+
+    def flaky_get(url, timeout=None):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise requests.ConnectTimeout("connect timed out")
+        return FakeDownload()
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        if "im/v1/image/create" in url:
+            return FakeResponse(payload={"code": 0, "data": {"image_key": "img-1"}})
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", flaky_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    one = Listing(
+        "jiaoyimao", "1", "单图", 1, "https://x.test/1", None, {},
+        ("https://img.test/1.jpg",),
+    )
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([one])
+
+    assert len(attempts) == 2
+    images = [
+        e for e in sent["json"]["card"]["elements"] if e.get("tag") == "img"
+    ]
+    assert [e["img_key"] for e in images] == ["img-1"]
+
+
 def test_feishu_falls_back_to_links_when_upload_fails(monkeypatch, capsys):
     sent = {}
 
