@@ -5,8 +5,8 @@ sites:
       - https://www.jiaoyimao.com/jg1008016/f2161571-c2161572/o110/?rId=107&searchCondition=%7B%22filter_low_quality%22%3A%7B%22conditionList%22%3A%5B%221%22%5D%7D%7D&enforcePlat=2&newPage=true
     max_pages: 3
     filters:
-      price_min: null
-      price_max: null
+      price_min: 1000        # 价格下限（元，含）；null = 不限
+      price_max: 4000        # 价格上限（元，含）；null = 不限
       platforms: ["安卓"]    # 只要安卓，不要苹果/iOS；空 = 全部
       servers: []
       include_keywords: []  # 匹配 title + description + sellPoints
