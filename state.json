@@ -8,7 +8,7 @@
   },
   "sites": {
     "jiaoyimao": {
-      "anchor_at": "2026-11-14T04:00:00+00:00",
+      "anchor_at": "2026-11-17T10:58:13.419886+00:00",
       "consecutive_failures": 0,
       "last_alert_at": null,
       "last_run": "2026-11-17T11:55:58.642471+00:00",
@@ -41,6 +41,5 @@
       }
     }
   },
-  "version": 1,
-  "anchor_at": "2026-11-17T10:58:13.419886+00:00"
+  "version": 1
 }
