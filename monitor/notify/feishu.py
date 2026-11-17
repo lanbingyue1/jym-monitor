@@ -50,7 +50,7 @@ class FeishuNotifier:
         self.webhook = webhook
         self.timeout = timeout
         self._uploader = (
-            FeishuImageUploader(app_id, app_secret, timeout)
+            FeishuImageUploader(app_id.strip(), app_secret.strip(), timeout)
             if app_id and app_secret
             else None
         )
@@ -275,7 +275,14 @@ class FeishuImageUploader:
             raise NotifyError(
                 f"feishu app auth returned HTTP {response.status_code}"
             )
-        payload = _json_payload(response, "feishu app auth")
+        payload = _json_payload(
+            response,
+            "feishu app auth",
+            hints={
+                21001: "飞书安全策略拦截：请确认应用已发布启用、权限已审核通过，"
+                "并检查安全设置中的 IP/访问限制"
+            },
+        )
         token = payload.get("tenant_access_token")
         if not isinstance(token, str) or not token:
             raise NotifyError("feishu app auth returned no token")
@@ -299,7 +306,9 @@ def _card_payload(elements: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _json_payload(response, context: str) -> dict[str, Any]:
+def _json_payload(
+    response, context: str, hints: dict[int, str] | None = None
+) -> dict[str, Any]:
     """Decode a Feishu API response, requiring ``code == 0``."""
     try:
         payload = response.json()
@@ -311,7 +320,11 @@ def _json_payload(response, context: str) -> dict[str, Any]:
     if not isinstance(code, int):
         raise NotifyError(f"{context} returned an unexpected error code")
     if code != 0:
-        raise NotifyError(f"{context} returned code {code}")
+        # Never echo the response message: it is untrusted.  Local hints for
+        # known codes are safe and let the log name the likely cause.
+        hint = (hints or {}).get(code)
+        suffix = f"（{hint}）" if hint else ""
+        raise NotifyError(f"{context} returned code {code}{suffix}")
     return payload
 
 

@@ -784,6 +784,59 @@ def test_feishu_retries_image_download_after_connect_timeout(monkeypatch):
     assert [e["img_key"] for e in images] == ["img-1"]
 
 
+def test_feishu_app_auth_policy_block_names_the_code_and_hint(monkeypatch, capsys):
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(payload={"code": 21001, "msg": "denied"})
+        return FakeResponse()
+
+    def fake_get(url, timeout=None):
+        return FakeDownload()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([RICH])
+
+    err = capsys.readouterr().err
+    assert "上传失败" in err
+    assert "21001" in err
+    assert "已发布" in err
+    assert "denied" not in err  # the untrusted response message is never echoed
+
+
+def test_feishu_strips_whitespace_from_app_credentials(monkeypatch):
+    auth = {}
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            auth.update(json)
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        if "im/v1/image/create" in url:
+            return FakeResponse(payload={"code": 0, "data": {"image_key": "k"}})
+        return FakeResponse()
+
+    def fake_get(url, timeout=None):
+        return FakeDownload()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    one = Listing(
+        "jiaoyimao", "1", "单图", 1, "https://x.test/1", None, {},
+        ("https://img.test/1.jpg",),
+    )
+    FeishuNotifier(
+        "https://hook", app_id=" cli_x\n", app_secret=" secret \n"
+    ).send([one])
+
+    assert auth == {"app_id": "cli_x", "app_secret": "secret"}
+
+
 def test_feishu_falls_back_to_links_when_upload_fails(monkeypatch, capsys):
     sent = {}
 
