@@ -45,6 +45,7 @@ class FakeSMTP:
         self.started_tls = False
         self.login_args = None
         self.message = None
+        self.sent_messages = []
 
     def __enter__(self):
         return self
@@ -60,6 +61,7 @@ class FakeSMTP:
 
     def send_message(self, message):
         self.message = message
+        self.sent_messages.append(message)
 
 
 def install_fake_smtp(monkeypatch, attr_name):
@@ -122,6 +124,33 @@ def test_feishu_payload_contains_item(monkeypatch):
     assert "和之国" in content
     assert "安卓" in content
     assert "https://www.jiaoyimao.com/jg1008016/1794831310167680.html" in content
+
+
+def test_feishu_send_multiple_items_in_one_message(monkeypatch):
+    calls = []
+    other = Listing(
+        "jiaoyimao",
+        "5",
+        "第二个商品",
+        200,
+        "https://x.test/5",
+        None,
+        {"server": "双平台", "platform": "iOS"},
+    )
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append(json)
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook").send([ITEM, other])
+
+    assert len(calls) == 1
+    elements = calls[0]["card"]["elements"]
+    assert len(elements) == 2
+    assert "6000勾玉 一命血影" in elements[0]["text"]["content"]
+    assert "第二个商品" in elements[1]["text"]["content"]
+    assert "¥200" in elements[1]["text"]["content"]
 
 
 def test_feishu_unknown_price(monkeypatch):
@@ -224,6 +253,33 @@ def test_email_builds_message(monkeypatch):
     body = message_body(smtp.message)
     assert "6000勾玉 一命血影" in body
     assert "¥100" in body
+
+
+def test_email_send_multiple_items_in_one_message(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+    other = Listing(
+        "jiaoyimao",
+        "6",
+        "第二个商品",
+        200,
+        "https://x.test/6",
+        None,
+        {"server": "双平台", "platform": "iOS"},
+    )
+
+    EmailNotifier("smtp.qq.com", 465, "u", "p", "me@example.com").send(
+        [ITEM, other]
+    )
+
+    assert len(created) == 1
+    smtp = created[0]
+    assert len(smtp.sent_messages) == 1
+    assert smtp.message["Subject"] == "交易猫新品提醒 (2)"
+    body = message_body(smtp.message)
+    assert "6000勾玉 一命血影" in body
+    assert "¥100" in body
+    assert "第二个商品" in body
+    assert "¥200" in body
 
 
 def test_email_escapes_fields_and_links_http_urls(monkeypatch):
