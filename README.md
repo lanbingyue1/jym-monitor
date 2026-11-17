@@ -65,10 +65,11 @@ git push -u origin main
 
 ### 2. 创建 `state` 分支
 
-在默认分支上执行：
+在默认分支上执行。先确保工作区干净且代码已提交，因为 `git rm -rf .` 会删除工作区中的已跟踪文件（随后 `git checkout main` 会把它们恢复）：
 
 ```bash
 git checkout --orphan state
+git rm -rf .
 echo '{"version": 1, "sites": {}, "notifiers": {}}' > state.json
 git add state.json && git commit -m "init state"
 git push origin state
@@ -77,9 +78,10 @@ git checkout main
 
 注意：
 
+- `git checkout --orphan state` 不会清空暂存区和工作区；必须用 `git rm -rf .` 把项目文件从 `state` 分支的提交中移除，否则 `state` 分支会包含整个项目。执行后 `state` 分支中只有 `state.json`。
 - 最后一行 `git checkout main` 中的 `main` 是仓库默认分支；如果默认分支是 `master` 等，请替换为实际名称。
-- 也可以在 GitHub 网页上直接新建 `state` 分支并创建 `state.json`，效果相同。
-- `state.json` 只应存在于 `state` 分支。回到默认分支后，本地可能残留未跟踪的 `state.json`，请删除，不要提交到默认分支。
+- 也可以在 GitHub 网页上直接新建 `state` 分支并创建 `state.json`；该分支中只应有 `state.json`，不要放入代码。
+- `state.json` 只存在于 `state` 分支；切回默认分支后它会被移除，默认分支不应提交 `state.json`。
 - 在 Windows PowerShell 中，`echo ... > state.json` 在旧版 PowerShell 下可能写成 UTF-16 编码；若如此，请改用编辑器保存为 UTF-8，或使用 PowerShell 7 / Git Bash。
 
 ### 3. 配置 Secrets
@@ -135,15 +137,28 @@ notify:
 
 ### 5. 二次验证
 
-1. 在 GitHub 打开 `state` 分支的 `state.json`，找到 `sites.jiaoyimao.seen` 中最新的一条商品（最大的 `goodsId`），删除该键值对并提交（网页编辑即可）。
-2. 等下一轮定时运行（通常 5–15 分钟），或手动执行一次 `Run workflow`。
-3. 预期：收到该商品的推送**恰好一次**；之后再运行不会重复（该 ID 已被重新写入 `seen`）。
+先理解判新规则：`is_new` 要求商品**不在 `seen` 中**，且发布时间**不早于 `anchor_at`**。程序用 `goodsId` 的前 13 位（毫秒时间戳）推导发布时间。首次运行会登记所有存量商品，它们的发布时间通常都早于首次运行写入的 `anchor_at`，所以直接删除其中任意一条通常不会触发推送。
+
+**做法 A：删除一条监控启动后上架的商品（推荐）**
+
+1. 在 `state` 分支的 `state.json` 中查看 `sites.jiaoyimao.anchor_at`，从 `sites.jiaoyimao.seen` 找一条 `goodsId` 前 13 位时间戳**晚于** `anchor_at` 的商品（即监控启动后真实上架、并已推送过的商品）。如果还没有这样的商品，先等监控跑出至少一条新商品，或使用做法 B。
+2. 删除该商品的 `goodsId` 键值对并提交（网页编辑即可）。
+3. 等下一轮定时运行（通常 5–15 分钟），或手动执行一次 `Run workflow`。
+4. 预期：收到该商品的推送**恰好一次**；之后再运行不会重复（该 ID 已被重新写入 `seen`）。
+
+**做法 B：立即验证（临时调整 `anchor_at`）**
+
+1. 从 `seen` 中选一条最新、且仍在前几页的商品，记下其 `goodsId`。
+2. 把 `goodsId` 前 13 位当作毫秒时间戳，将 `state.json` 中的 `anchor_at` 临时改到该时间之前（例如提前 1 分钟），并从 `seen` 中删除该 `goodsId` 的键值对，提交。
+   - 换算示例（把数字换成你的前 13 位）：`python -c "import datetime; print(datetime.datetime.fromtimestamp(1793434810016/1000, datetime.timezone.utc).isoformat())"`
+3. 等下一轮或手动执行一次 `Run workflow`；预期该商品推送**恰好一次**，之后再运行不重复。
+4. 验证完成后把 `anchor_at` 恢复为原值，避免改变后续的判新起点。
 
 注意事项：
 
-- 请删除最新的一条，确保它仍在列表前几页；删除过旧的商品可能已经滚出抓取范围，不会被看到。
+- 被删除的商品必须仍在抓取范围内（列表前几页）；删除过旧的商品可能已经滚出范围，不会被看到。
 - 当前 `config.yaml` 的过滤器为空，所以所有商品都会推送；如果你启用了过滤且该商品不满足条件，就不会收到推送。
-- 该商品的发布时间必须不早于首次运行的 `anchor_at`，否则按判新规则不会被推送；最新商品通常都满足。
+- 做法 B 临时提前 `anchor_at` 后，如果还有其它未登记的商品，也可能一并推送；首次运行的商品都已在 `seen` 中，正常只会推送你删除的那一条。
 
 ## 配置说明
 
