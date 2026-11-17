@@ -52,6 +52,7 @@ class RunResult:
     used_browser: bool = False
     errors: list[str] = field(default_factory=list)
     alerts_sent: int = 0
+    would_notify: tuple[Listing, ...] = ()
 
 
 def run_once(
@@ -185,6 +186,7 @@ class _Runner:
         new_items = [item for item in listings if is_new(item, site_state)]
         actionable = [item for item in new_items if matches(item, site_cfg.filters)]
         self.result.new += len(actionable)
+        self.result.would_notify += tuple(actionable)
 
         if not actionable:
             mark_seen(site_state, listings, self.now)
