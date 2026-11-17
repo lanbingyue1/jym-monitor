@@ -10,7 +10,7 @@ import yaml
 
 from monitor import __main__ as cli
 from monitor import healthcheck
-from monitor.errors import ConfigError, FetchError, StateError
+from monitor.errors import ConfigError, FetchError, NotifyError, StateError
 from monitor.models import Listing
 from monitor.state import new_state
 
@@ -410,6 +410,63 @@ def test_ping_swallows_exceptions(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# Test notification
+# ---------------------------------------------------------------------------
+
+
+class FailingNotifier(FakeNotifier):
+    name = "email"
+
+    def send_text(self, text, *, subject=None):
+        raise NotifyError("email delivery failed: SMTPAuthenticationError")
+
+
+def test_test_notify_sends_through_every_channel(monkeypatch, tmp_path, capsys):
+    first, second = FakeNotifier(), FakeNotifier()
+    second.name = "email"
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [first, second])
+    path = write_config(tmp_path, CONFIG_WITH_NOTIFY)
+
+    code = cli.main(["--config", str(path), "--test-notify"], env={})
+
+    assert code == 0
+    assert len(first.texts) == 1 and len(second.texts) == 1
+    assert "发送成功" in output_of(capsys)
+
+
+def test_test_notify_reports_failure_and_continues(monkeypatch, tmp_path, capsys):
+    failing, ok = FailingNotifier(), FakeNotifier()
+    ok.name = "feishu"
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [failing, ok])
+    path = write_config(tmp_path, CONFIG_WITH_NOTIFY)
+
+    code = cli.main(["--config", str(path), "--test-notify"], env={})
+
+    assert code == 1
+    assert ok.texts, "a failing channel must not stop the others"
+    assert "email 发送失败" in output_of(capsys)
+
+
+def test_test_notify_without_channels_exits_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [])
+    path = write_config(tmp_path)
+
+    assert cli.main(["--config", str(path), "--test-notify"], env={}) == 1
+    assert "没有启用任何通知渠道" in output_of(capsys)
+
+
+def test_test_notify_config_error_exits_1(monkeypatch, tmp_path, capsys):
+    def boom(cfg, env):
+        raise ConfigError("missing required environment variable: SMTP_HOST")
+
+    monkeypatch.setattr(cli, "build_notifiers", boom)
+    path = write_config(tmp_path, CONFIG_WITH_NOTIFY)
+
+    assert cli.main(["--config", str(path), "--test-notify"], env={}) == 1
+    assert "SMTP_HOST" in output_of(capsys)
+
+
+# ---------------------------------------------------------------------------
 # Workflow definition
 # ---------------------------------------------------------------------------
 
@@ -447,3 +504,9 @@ def test_workflow_definition():
     assert steps[1]["with"]["python-version"] == "3.12"
     assert steps[2]["run"] == "pip install -r requirements.txt"
     assert steps[3]["run"] == "python -m monitor"
+    assert steps[3]["if"] == "${{ !inputs.test_notify }}"
+    assert steps[4]["run"] == "python -m monitor --test-notify"
+    assert steps[4]["if"] == "${{ inputs.test_notify }}"
+
+    dispatch = data["on"]["workflow_dispatch"]
+    assert dispatch["inputs"]["test_notify"]["default"] is False

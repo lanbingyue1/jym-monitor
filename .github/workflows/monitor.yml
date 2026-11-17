@@ -4,6 +4,11 @@ name: monitor
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      test_notify:
+        description: "只发送一条测试消息（不抓取、不写状态）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,4 +44,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run monitor
+        if: ${{ !inputs.test_notify }}
         run: python -m monitor
+      - name: Send test notification
+        if: ${{ inputs.test_notify }}
+        run: python -m monitor --test-notify

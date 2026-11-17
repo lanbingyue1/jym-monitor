@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Mapping
 
 from monitor.config import Config, load_config
-from monitor.errors import ConfigError, StateError
+from monitor.errors import ConfigError, NotifyError, StateError
 from monitor.healthcheck import ping
 from monitor.notify import build_notifiers
 from monitor.pipeline import RunResult, run_once
@@ -34,6 +34,8 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         print(f"配置加载失败: {exc}", file=sys.stderr)
         return 1
 
+    if args.test_notify:
+        return _test_notify(config, environment)
     if args.dry_run:
         return _dry_run(config, environment)
     return _real_run(config, environment)
@@ -53,6 +55,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="只抓取并打印将要推送的条目，不通知、不写状态",
+    )
+    parser.add_argument(
+        "--test-notify",
+        action="store_true",
+        help="给每个已配置的通知渠道发一条测试消息，不抓取、不写状态",
     )
     return parser
 
@@ -78,6 +85,38 @@ def _dry_run(config: Config, env: Mapping[str, str]) -> int:
         price = "价格未知" if item.price is None else f"¥{item.price}"
         print(f"{item.title} | {price} | {item.url}")
     return 0
+
+
+_TEST_TEXT = "交易猫监控测试消息：收到这条说明该通知渠道配置正确。"
+_TEST_SUBJECT = "交易猫监控测试消息"
+
+
+def _test_notify(config: Config, env: Mapping[str, str]) -> int:
+    """Send one test message through every configured channel.
+
+    Used to verify SMTP/webhook credentials without waiting for a new listing.
+    Touches no state and needs no ``GITHUB_TOKEN``; every channel is attempted
+    even when an earlier one fails.
+    """
+    try:
+        notifiers = build_notifiers(config.notify, env)
+    except ConfigError as exc:
+        print(f"通知渠道配置失败: {exc}", file=sys.stderr)
+        return 1
+    if not notifiers:
+        print("没有启用任何通知渠道", file=sys.stderr)
+        return 1
+
+    failed: list[str] = []
+    for notifier in notifiers:
+        try:
+            notifier.send_text(_TEST_TEXT, subject=_TEST_SUBJECT)
+        except NotifyError as exc:
+            print(f"{notifier.name} 发送失败: {exc}", file=sys.stderr)
+            failed.append(notifier.name)
+        else:
+            print(f"{notifier.name} 发送成功")
+    return 1 if failed else 0
 
 
 def _real_run(config: Config, env: Mapping[str, str]) -> int:
