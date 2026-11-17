@@ -29,6 +29,7 @@ def build_notifiers(cfg: NotifyConfig, env: Mapping[str, str]) -> list[Notifier]
                     _require(env, "FEISHU_WEBHOOK"),
                     app_id=app_id,
                     app_secret=app_secret,
+                    include_images=cfg.include_images,
                 )
             )
         elif channel == "email":
@@ -51,6 +52,7 @@ def build_notifiers(cfg: NotifyConfig, env: Mapping[str, str]) -> list[Notifier]
                     password,
                     mail_to,
                     use_ssl=port == 465,
+                    include_images=cfg.include_images,
                 )
             )
         else:

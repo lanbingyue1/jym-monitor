@@ -37,6 +37,9 @@ class SiteConfig:
 class NotifyConfig:
     channels: tuple[str, ...] = ()
     batch_size: int = 10
+    # When off, notifications omit listing images entirely (no inline uploads,
+    # no image links).  The image code stays in place for when it is turned on.
+    include_images: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,9 @@ def load_config(path: str | Path) -> Config:
         notify=NotifyConfig(
             channels=channels,
             batch_size=notify_raw.get("batch_size", 10),
+            include_images=_as_bool(
+                notify_raw.get("include_images"), "notify.include_images", True
+            ),
         ),
         alerts=AlertConfig(
             consecutive_failures_before_alert=alerts_raw.get(
@@ -160,9 +166,9 @@ def _parse_site(site_id: str, raw: Any) -> SiteConfig:
     )
 
 
-def _as_bool(value: Any, name: str) -> bool:
+def _as_bool(value: Any, name: str, default: bool = False) -> bool:
     if value is None:
-        return False
+        return default
     if not isinstance(value, bool):
         raise ValueError(f"'{name}' must be true or false")
     return value

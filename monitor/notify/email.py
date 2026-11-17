@@ -33,6 +33,7 @@ class EmailNotifier:
         password: str,
         to: str,
         use_ssl: bool = True,
+        include_images: bool = True,
     ):
         self.host = host
         self.port = int(port)
@@ -40,6 +41,7 @@ class EmailNotifier:
         self.password = password
         self.to = _parse_addresses(to)
         self.use_ssl = use_ssl
+        self.include_images = include_images
 
     def send(self, items: list[Listing]) -> None:
         if not items:
@@ -48,8 +50,10 @@ class EmailNotifier:
         message["Subject"] = f"交易猫新品提醒 ({len(items)})"
         message["From"] = self.user
         message["To"] = ", ".join(self.to)
-        message.set_content(_plain_body(items))
-        message.add_alternative(_html_body(items), subtype="html")
+        message.set_content(_plain_body(items, self.include_images))
+        message.add_alternative(
+            _html_body(items, self.include_images), subtype="html"
+        )
         self._deliver(message)
 
     def send_text(self, text: str, *, subject: str | None = None) -> None:
@@ -93,7 +97,7 @@ def _price_text(item: Listing) -> str:
     return "价格未知" if item.price is None else f"¥{item.price}"
 
 
-def _plain_body(items: list[Listing]) -> str:
+def _plain_body(items: list[Listing], include_images: bool = True) -> str:
     lines: list[str] = []
     for item in items:
         lines.append(item.title)
@@ -113,14 +117,15 @@ def _plain_body(items: list[Listing]) -> str:
         if note:
             lines.append(f"卖家说：{note}")
         lines.extend(safe_report_lines(item.safe_report))
-        for index, url in enumerate(item.images, 1):
-            lines.append(f"图片{index}：{url}")
+        if include_images:
+            for index, url in enumerate(item.images, 1):
+                lines.append(f"图片{index}：{url}")
         lines.append(item.url)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _html_body(items: list[Listing]) -> str:
+def _html_body(items: list[Listing], include_images: bool = True) -> str:
     rows: list[str] = []
     details: list[str] = []
     # Only add the 上架时间 column when at least one item has a publication
@@ -149,7 +154,7 @@ def _html_body(items: list[Listing]) -> str:
             f"<td>{html.escape(extra_value(item, 'platform'))}</td>"
             "</tr>"
         )
-        details.append(_html_details(item))
+        details.append(_html_details(item, include_images))
 
     published_header = "<th>上架时间</th>" if show_published else ""
     return (
@@ -167,7 +172,7 @@ def _html_body(items: list[Listing]) -> str:
     )
 
 
-def _html_details(item: Listing) -> str:
+def _html_details(item: Listing, include_images: bool = True) -> str:
     """Render the fields that do not fit the summary table."""
     parts: list[str] = [f"<h3>{html.escape(item.title)}</h3>"]
 
@@ -179,7 +184,7 @@ def _html_details(item: Listing) -> str:
         parts.append(f"<p>卖家说：{html.escape(note)}</p>")
     for line in safe_report_lines(item.safe_report):
         parts.append(f"<p>{html.escape(line)}</p>")
-    if item.images:
+    if include_images and item.images:
         links = " ".join(
             f'<a href="{html.escape(url, quote=True)}">图{index}</a>'
             for index, url in enumerate(item.images, 1)

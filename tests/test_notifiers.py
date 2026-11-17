@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import smtplib
 from datetime import datetime, timezone
 
@@ -990,6 +991,54 @@ def test_build_feishu_notifier_accepts_app_credentials():
         },
     )
     assert len(notifiers) == 1
+
+
+def test_build_notifiers_passes_include_images_flag():
+    cfg = NotifyConfig(channels=("feishu",), batch_size=10, include_images=False)
+    notifiers = build_notifiers(
+        cfg, {"FEISHU_WEBHOOK": "https://hook"}
+    )
+    assert notifiers[0].include_images is False
+
+
+def test_feishu_include_images_off_skips_uploads_and_links(monkeypatch):
+    posts = []
+
+    def fake_get(url, timeout=None):
+        raise AssertionError("images must not be downloaded")
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        posts.append({"url": url, "json": json})
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook",
+        app_id="cli_x",
+        app_secret="secret",
+        include_images=False,
+    ).send([RICH])
+
+    assert len(posts) == 1
+    elements = posts[0]["json"]["card"]["elements"]
+    assert [e["tag"] for e in elements] == ["div"]
+    assert "img.test" not in json.dumps(posts[0]["json"], ensure_ascii=False)
+
+
+def test_email_include_images_off_omits_image_links(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+
+    EmailNotifier(
+        "smtp.qq.com", 465, "u", "p", "me@example.com", include_images=False
+    ).send([RICH])
+
+    body = message_body(created[0].message)
+    assert "图片" not in body and "img.test" not in body
+
+    html_body = message_part(created[0].message, "html")
+    assert "img.test" not in html_body
 
 
 def test_email_body_includes_account_note_report_and_images(monkeypatch):

@@ -53,9 +53,11 @@ class FeishuNotifier:
         timeout: float = 10,
         app_id: str | None = None,
         app_secret: str | None = None,
+        include_images: bool = True,
     ):
         self.webhook = webhook
         self.timeout = timeout
+        self.include_images = include_images
         self._uploader = (
             FeishuImageUploader(app_id.strip(), app_secret.strip(), timeout)
             if app_id and app_secret
@@ -74,11 +76,12 @@ class FeishuNotifier:
                     "text": {"tag": "lark_md", "content": _item_markdown(item)},
                 }
             )
-            image_elements = self._image_elements(
-                item, min(_INLINE_IMAGE_LIMIT, budget)
-            )
-            budget -= sum(1 for e in image_elements if e.get("tag") == "img")
-            elements.extend(image_elements)
+            if self.include_images:
+                image_elements = self._image_elements(
+                    item, min(_INLINE_IMAGE_LIMIT, budget)
+                )
+                budget -= sum(1 for e in image_elements if e.get("tag") == "img")
+                elements.extend(image_elements)
 
         try:
             self._post(_card_payload(elements))

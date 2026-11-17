@@ -24,6 +24,7 @@ sites:
 notify:
   channels: [feishu, email]
   batch_size: 10
+  include_images: false
 alerts:
   consecutive_failures_before_alert: 3
   min_alert_interval_minutes: 180
@@ -39,6 +40,7 @@ bootstrap:
     assert site.filters.platforms == ("安卓",)
     assert site.filters.require_account_transfer is True
     assert cfg.notify.channels == ("feishu", "email")
+    assert cfg.notify.include_images is False
     assert cfg.bootstrap_notify is True
 
 
@@ -50,6 +52,7 @@ def test_minimal_config_uses_defaults(tmp_path: Path):
     assert site.enabled is True and site.max_pages == 3
     assert site.filters == Filters()
     assert cfg.notify.batch_size == 10
+    assert cfg.notify.include_images is True
     assert cfg.alerts.consecutive_failures_before_alert == 3
     assert cfg.bootstrap_notify is True
 
@@ -77,6 +80,18 @@ def test_require_account_transfer_must_be_boolean(tmp_path: Path):
     with pytest.raises(ValueError) as excinfo:
         load_config(p)
     assert "require_account_transfer" in str(excinfo.value)
+
+
+def test_include_images_must_be_boolean(tmp_path: Path):
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "sites:\n  jiaoyimao:\n    urls: [u]\n"
+        "notify:\n  channels: [feishu]\n  include_images: 'no'\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_config(p)
+    assert "include_images" in str(excinfo.value)
 
 
 def test_unknown_notify_channel_raises_value_error(tmp_path: Path):
