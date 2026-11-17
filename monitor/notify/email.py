@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import smtplib
 from email.message import EmailMessage
+from urllib.parse import urlsplit, urlunsplit
 
 from monitor.errors import NotifyError
 from monitor.models import Listing
@@ -18,6 +19,8 @@ from monitor.notify.base import (
 
 SMTP_TIMEOUT = 20
 ALERT_SUBJECT = "[监控异常] 交易猫监控"
+# Mail is usually opened on a phone; the desktop pages render poorly there.
+_MOBILE_HOSTS = {"www.jiaoyimao.com": "m.jiaoyimao.com"}
 
 
 class EmailNotifier:
@@ -102,6 +105,15 @@ def _price_text(item: Listing) -> str:
     return "价格未知" if item.price is None else f"¥{item.price:,}"
 
 
+def _mobile_url(url: str) -> str:
+    """Rewrite a marketplace URL to its mobile host, keeping path and query."""
+    parts = urlsplit(url)
+    mobile = _MOBILE_HOSTS.get(parts.netloc.lower())
+    if mobile is None:
+        return url
+    return urlunsplit(parts._replace(netloc=mobile))
+
+
 def _plain_body(
     items: list[Listing],
     include_images: bool = True,
@@ -130,7 +142,7 @@ def _plain_body(
         if include_images:
             for index, url in enumerate(item.images, 1):
                 lines.append(f"图片{index}：{url}")
-        lines.append(item.url)
+        lines.append(_mobile_url(item.url))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -196,6 +208,7 @@ def _html_card(
 ) -> str:
     """Render one listing as a self-contained card row pair."""
     parts: list[str] = []
+    link = _mobile_url(item.url)
     published = published_text(item.published_at)
     time_cell = (
         '<td style="font-size:12px;color:#8f959e;vertical-align:middle;">'
@@ -214,9 +227,9 @@ def _html_card(
     )
 
     title = html.escape(item.title)
-    if _is_http(item.url):
+    if _is_http(link):
         title = (
-            f'<a href="{html.escape(item.url, quote=True)}" '
+            f'<a href="{html.escape(link, quote=True)}" '
             f'style="color:#1f2329;text-decoration:none;">{title}</a>'
         )
     parts.append(
@@ -264,13 +277,13 @@ def _html_card(
             f"图片：{links}</div>"
         )
 
-    if _is_http(item.url):
+    if _is_http(link):
         parts.append(
             '<table role="presentation" width="100%" cellpadding="0" '
             'cellspacing="0" style="margin:14px 0 0 0;"><tr>'
             '<td align="center" style="background:#1677ff;'
             'border-radius:8px;">'
-            f'<a href="{html.escape(item.url, quote=True)}" '
+            f'<a href="{html.escape(link, quote=True)}" '
             'style="display:block;padding:12px 16px;font-size:15px;'
             'font-weight:600;color:#ffffff;text-decoration:none;">'
             "查看商品详情 →</a></td></tr></table>"
@@ -278,7 +291,7 @@ def _html_card(
     elif item.url:
         parts.append(
             '<div style="margin:10px 0 0 0;font-size:12px;color:#8f959e;'
-            f'word-break:break-all;">{html.escape(item.url)}</div>'
+            f'word-break:break-all;">{html.escape(link)}</div>'
         )
 
     return (

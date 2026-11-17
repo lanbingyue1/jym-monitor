@@ -13,7 +13,7 @@ from monitor.config import NotifyConfig
 from monitor.errors import ConfigError, NotifyError
 from monitor.models import Listing
 from monitor.notify import build_notifiers
-from monitor.notify.email import EmailNotifier
+from monitor.notify.email import EmailNotifier, _mobile_url
 from monitor.notify.feishu import FeishuNotifier
 
 ITEM = Listing(
@@ -416,6 +416,42 @@ def test_email_non_http_url_is_not_linked(monkeypatch):
     body = message_part(created[0].message, "html")
     assert "<a " not in body
     assert "javascript:alert(1)" in body
+
+
+def test_email_links_point_to_mobile_site(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+    item = Listing(
+        "jiaoyimao",
+        "1794896009273964",
+        "手机版链接",
+        4000,
+        "https://www.jiaoyimao.com/jg1008016/1794896009273964.html?rId=1&x=2",
+        None,
+        {},
+    )
+
+    EmailNotifier("smtp.qq.com", 465, "u", "p", "me@example.com").send([item])
+
+    body = message_body(created[0].message)
+    assert (
+        "https://m.jiaoyimao.com/jg1008016/1794896009273964.html?rId=1&x=2" in body
+    )
+    assert "www.jiaoyimao.com" not in body
+
+    html_body = message_part(created[0].message, "html")
+    assert (
+        'href="https://m.jiaoyimao.com/jg1008016/1794896009273964.html'
+        '?rId=1&amp;x=2"' in html_body
+    )
+    assert "www.jiaoyimao.com" not in html_body
+
+
+def test_mobile_url_keeps_other_hosts_and_non_http_urls():
+    assert (
+        _mobile_url("https://x.test/item?a=1")
+        == "https://x.test/item?a=1"
+    )
+    assert _mobile_url("javascript:alert(1)") == "javascript:alert(1)"
 
 
 def test_email_send_text(monkeypatch):
