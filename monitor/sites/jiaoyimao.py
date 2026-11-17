@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
+import requests
+
+from monitor.errors import FetchError
 from monitor.models import Listing
 
 SITE = "jiaoyimao"
@@ -22,11 +26,80 @@ _UNDEFINED_RE = re.compile(r"(?<=:)\s*undefined(?=\s*[,}])")
 _EARLIEST_PUBLISHED_AT = datetime(2020, 1, 1, tzinfo=timezone.utc)
 _DETAIL_URL_TEMPLATE = "https://www.jiaoyimao.com/jg1008016/{goods_id}.html"
 
+_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Referer": "https://www.jiaoyimao.com/",
+}
+_FETCH_TIMEOUT_SECONDS = 30
+_RETRY_WAIT_SECONDS = 3
+_BROWSER_WAIT_SECONDS = 6
+_BROWSER_TIMEOUT_MILLIS = 90_000
+_WEBDRIVER_INIT_SCRIPT = (
+    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+)
+
 
 def is_punish(html: str) -> bool:
     """Return True when the page is an anti-bot punish page."""
     head = html[:_PUNISH_SCAN_LIMIT]
     return any(marker in head for marker in _PUNISH_MARKERS)
+
+
+def fetch_html(url: str, session: requests.Session | None = None) -> str:
+    """Fetch *url* over HTTP, retrying once after a punish or non-2xx reply."""
+    get = session.get if session is not None else requests.get
+    last_exc: Exception | None = None
+
+    for attempt in range(2):
+        if attempt:
+            time.sleep(_RETRY_WAIT_SECONDS)
+        try:
+            response = get(url, headers=_FETCH_HEADERS, timeout=_FETCH_TIMEOUT_SECONDS)
+        except requests.RequestException as exc:
+            last_exc = exc
+            continue
+        if 200 <= response.status_code < 300 and not is_punish(response.text):
+            return response.text
+        last_exc = None
+
+    raise FetchError(f"could not fetch {url}") from last_exc
+
+
+def fetch_with_browser(url: str) -> str:
+    """Fetch *url* with a real Chrome via Playwright as an anti-bot fallback."""
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                channel="chrome",
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            try:
+                page = browser.new_page()
+                page.add_init_script(_WEBDRIVER_INIT_SCRIPT)
+                page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=_BROWSER_TIMEOUT_MILLIS,
+                )
+                time.sleep(_BROWSER_WAIT_SECONDS)
+                html = page.content()
+            finally:
+                browser.close()
+    except FetchError:
+        raise
+    except Exception as exc:
+        raise FetchError(f"browser fetch failed for {url}") from exc
+
+    if is_punish(html):
+        raise FetchError(f"browser fetch still hit the anti-bot page for {url}")
+    return html
 
 
 def parse_published_at(item_id: str, now: datetime | None = None) -> datetime | None:
