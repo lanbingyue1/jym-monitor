@@ -67,3 +67,10 @@ def test_unknown_notify_channel_raises_value_error(tmp_path: Path):
     )
     with pytest.raises(ValueError):
         load_config(p)
+
+
+def test_malformed_yaml_raises_value_error(tmp_path: Path):
+    p = tmp_path / "config.yaml"
+    p.write_text("sites: [unclosed", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(p)

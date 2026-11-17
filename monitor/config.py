@@ -52,7 +52,10 @@ class Config:
 
 def load_config(path: str | Path) -> Config:
     """Load and validate the YAML config file at *path*."""
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    try:
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML in {path}: {exc}") from exc
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
