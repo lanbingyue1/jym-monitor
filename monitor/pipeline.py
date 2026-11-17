@@ -197,14 +197,18 @@ class _Runner:
         new_items = [item for item in listings if is_new(item, site_state)]
         actionable = [item for item in new_items if matches(item, site_cfg.filters)]
         actionable = self._enrich(site_id, adapter, actionable)
-        actionable = self._filter_account_transfer(
+        actionable, retry = self._filter_account_transfer(
             site_id, site_cfg.filters.require_account_transfer, actionable
         )
+        # Items whose 「账号转移」 status could not be read stay out of ``seen``
+        # so the next run fetches their detail page again instead of losing
+        # them to a transient failure.
+        markable = [item for item in listings if item.item_id not in retry]
         self.result.new += len(actionable)
         self.result.would_notify += tuple(actionable)
 
         if not actionable:
-            mark_seen(site_state, listings, self.now)
+            mark_seen(site_state, markable, self.now)
             return
 
         if not self.notifiers:
@@ -214,7 +218,7 @@ class _Runner:
                     "no notification channels"
                 )
                 return
-            mark_seen(site_state, listings, self.now)
+            mark_seen(site_state, markable, self.now)
             return
 
         failed = False
@@ -226,7 +230,7 @@ class _Runner:
                 failed = True
 
         if not failed:
-            mark_seen(site_state, listings, self.now)
+            mark_seen(site_state, markable, self.now)
 
     def _enrich(
         self, site_id: str, adapter: SiteAdapter, items: list[Listing]
@@ -264,37 +268,38 @@ class _Runner:
 
     def _filter_account_transfer(
         self, site_id: str, required: bool, items: list[Listing]
-    ) -> list[Listing]:
+    ) -> tuple[list[Listing], set[str]]:
         """Keep only listings whose detail page says 「账号转移」 is 是.
 
-        The status exists only on the detail page.  When it could not be read
-        (detail fetch failed, or the page carries no such step) the listing is
-        dropped rather than pushed unverified, and the run records a warning
-        so the gap is visible.  Dry runs do not fetch detail pages, so they
-        cannot apply this rule; they keep every listing and say so.
+        Returns the kept listings and the IDs whose status could not be read
+        (detail fetch failed, or the page carries no such step).  Unknown
+        items are dropped rather than pushed unverified, and their IDs are
+        returned so the caller can leave them unseen for a retry next run.
+        Dry runs do not fetch detail pages, so they cannot apply this rule;
+        they keep every listing and say so.
         """
         if not required or not items:
-            return items
+            return items, set()
         if self.dry_run:
             self.result.warnings.append(
                 f"{site_id}: 试运行不抓取详情页，「账号转移」过滤未生效"
             )
-            return items
+            return items, set()
 
         kept: list[Listing] = []
-        unknown = 0
+        retry: set[str] = set()
         for item in items:
             status = item.safe_report.account_transfer if item.safe_report else ""
             if status == "是":
                 kept.append(item)
             elif not status:
-                unknown += 1
-        if unknown:
+                retry.add(item.item_id)
+        if retry:
             self.result.warnings.append(
-                f"{site_id}: {unknown} item(s) skipped: 「账号转移」状态未知"
-                "（详情页不可用），未推送"
+                f"{site_id}: {len(retry)} item(s) skipped: 「账号转移」状态未知"
+                "（详情页不可用），未推送，下轮重试"
             )
-        return kept
+        return kept, retry
 
     # -- channel calls ----------------------------------------------------
 

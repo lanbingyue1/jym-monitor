@@ -205,7 +205,7 @@ notify:
 | `sites.jiaoyimao.max_pages` | `3` | 每轮最多翻几页 |
 | `sites.jiaoyimao.filters.price_min` / `price_max` | `null` | 价格区间（元）；`null` 表示不限。设置区间后价格未知的商品会被过滤 |
 | `sites.jiaoyimao.filters.platforms` | `[]` | 平台白名单（如「安卓」「iOS」「双端」）；空表示全部。当前默认 `["安卓"]` |
-| `sites.jiaoyimao.filters.require_account_transfer` | `false` | 设为 `true` 时只推送详情页「账号转移 = 是」的商品。该状态只在详情页出现，因此会先抓一次详情；详情抓取失败或状态未知的商品不推送，并在运行日志里记一条警告 |
+| `sites.jiaoyimao.filters.require_account_transfer` | `false` | 设为 `true` 时只推送详情页「账号转移 = 是」的商品。该状态只在详情页出现，因此会先抓一次详情；详情抓取失败或状态未知的商品不推送，记一条警告并留到下轮重试 |
 | `sites.jiaoyimao.filters.servers` | `[]` | 服务器白名单；空表示全部 |
 | `sites.jiaoyimao.filters.include_keywords` | `[]` | 必须命中的关键词，匹配标题、描述和卖点；空表示不过滤 |
 | `sites.jiaoyimao.filters.exclude_keywords` | `[]` | 排除关键词，优先级高于包含关键词 |

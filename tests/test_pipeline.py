@@ -534,7 +534,25 @@ def test_require_account_transfer_notifies_only_yes(tmp_path):
     assert r.new == 1 and r.notified == 1
     assert any("账号转移" in w for w in r.warnings)
     seen = store.load()["sites"]["jiaoyimao"]["seen"]
-    assert {"2", "3", "4"} <= set(seen)
+    assert {"2", "3"} <= set(seen)
+    assert "4" not in seen  # unknown status: retried on the next run
+
+
+def test_unknown_account_transfer_is_retried_next_run(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+    f = Filters(require_account_transfer=True)
+
+    failing = EnrichingAdapter([listing("1"), listing("2")], {}, fail_ids={"2"})
+    run_once(cfg(filters=f), [failing], [n], store, now=NOW + timedelta(minutes=5))
+    assert n.items == []
+
+    adapter = EnrichingAdapter([listing("1"), listing("2")], {"2": _enriched("2")})
+    r = run_once(cfg(filters=f), [adapter], [n], store,
+                 now=NOW + timedelta(minutes=10))
+
+    assert adapter.detail_calls == ["2"]
+    assert [x.item_id for x in n.items] == ["2"] and r.notified == 1
 
 
 def test_require_account_transfer_off_notifies_everything(tmp_path):
