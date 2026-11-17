@@ -80,7 +80,7 @@ git checkout main
 
 - `git checkout --orphan state` 不会清空暂存区和工作区；必须用 `git rm -rf .` 把项目文件从 `state` 分支的提交中移除，否则 `state` 分支会包含整个项目。执行后 `state` 分支中只有 `state.json`。
 - 最后一行 `git checkout main` 中的 `main` 是仓库默认分支；如果默认分支是 `master` 等，请替换为实际名称。
-- 也可以在 GitHub 网页上直接新建 `state` 分支并创建 `state.json`；该分支中只应有 `state.json`，不要放入代码。
+- 也可以在 GitHub 网页上直接新建 `state` 分支并创建 `state.json`。网页创建的分支会从默认分支带过来整个项目的文件，而不是只有 `state.json`；监控只读写 `state.json`，这些多余文件不影响运行，也可以在 `state` 分支中把它们删除。
 - `state.json` 只存在于 `state` 分支；切回默认分支后它会被移除，默认分支不应提交 `state.json`。
 - 在 Windows PowerShell 中，`echo ... > state.json` 在旧版 PowerShell 下可能写成 UTF-16 编码；若如此，请改用编辑器保存为 UTF-8，或使用 PowerShell 7 / Git Bash。
 
@@ -138,6 +138,8 @@ notify:
 ### 5. 二次验证
 
 先理解判新规则：`is_new` 要求商品**不在 `seen` 中**，且发布时间**不早于 `anchor_at`**。程序用 `goodsId` 的前 13 位（毫秒时间戳）推导发布时间。首次运行会登记所有存量商品，它们的发布时间通常都早于首次运行写入的 `anchor_at`，所以直接删除其中任意一条通常不会触发推送。
+
+动手修改前，先停用定时任务：**Actions → monitor → Disable workflow**。验证完成后再重新启用（Enable workflow）；否则一轮已经开始或正在排队的运行可能在你的手动编辑之后重新 PUT 它内存中的旧状态，把手动修改覆盖掉。
 
 **做法 A：删除一条监控启动后上架的商品（推荐）**
 
