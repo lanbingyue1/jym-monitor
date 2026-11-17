@@ -11,13 +11,18 @@ import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Callable
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 import requests
 
+from monitor.config import SiteConfig
 from monitor.errors import FetchError
 from monitor.models import Listing
 
 SITE = "jiaoyimao"
+PAGE_SIZE = 16
+PAGE_SLEEP_SECONDS = 1.5
 
 _INITIAL_DATA_MARKER = "window.__INITIAL_DATA__"
 _PUNISH_SCAN_LIMIT = 6000
@@ -199,3 +204,87 @@ def _to_listing(data: dict) -> Listing:
         published_at=parse_published_at(goods_id),
         extra=extra,
     )
+
+
+def _page_url(url: str, page: int) -> str:
+    """Return *url* with its ``page`` query parameter set to *page*.
+
+    Other query parameters are copied verbatim so percent-encoded values such
+    as ``searchCondition`` keep their original form.
+    """
+    parts = urlsplit(url)
+    segments = [
+        segment
+        for segment in parts.query.split("&")
+        if segment and unquote_plus(segment.split("=", 1)[0]) != "page"
+    ]
+    segments.append(f"page={page}")
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, "&".join(segments), parts.fragment)
+    )
+
+
+class JiaoyimaoAdapter:
+    """Fetch jiaoyimao search results page by page until known IDs appear."""
+
+    site_id = SITE
+
+    def __init__(
+        self,
+        cfg: SiteConfig,
+        http_fetch: Callable[[str], str] = fetch_html,
+        browser_fetch: Callable[[str], str] = fetch_with_browser,
+    ) -> None:
+        self.cfg = cfg
+        self.http_fetch = http_fetch
+        self.browser_fetch = browser_fetch
+        self.used_browser = False
+        self.saturated = False
+
+    def fetch(self, known_ids: frozenset[str] = frozenset()) -> list[Listing]:
+        """Return deduplicated listings from every configured URL."""
+        self.used_browser = False
+        self.saturated = False
+
+        listings: list[Listing] = []
+        seen: set[str] = set()
+        for url in self.cfg.urls:
+            self._fetch_url(url, known_ids, listings, seen)
+        return listings
+
+    def _fetch_url(
+        self,
+        url: str,
+        known_ids: frozenset[str],
+        listings: list[Listing],
+        seen: set[str],
+    ) -> None:
+        for page in range(1, self.cfg.max_pages + 1):
+            if page > 1:
+                time.sleep(PAGE_SLEEP_SECONDS)
+            page_url = _page_url(url, page)
+            html = self._fetch_page(page_url)
+            try:
+                page_items = parse_listings(html)
+            except ValueError as exc:
+                raise FetchError(
+                    f"could not parse listings from {page_url}: {exc}"
+                ) from exc
+
+            for item in page_items:
+                if item.item_id not in seen:
+                    seen.add(item.item_id)
+                    listings.append(item)
+
+            if any(item.item_id in known_ids for item in page_items):
+                return
+
+            if page == self.cfg.max_pages and len(page_items) == PAGE_SIZE:
+                self.saturated = True
+
+    def _fetch_page(self, url: str) -> str:
+        try:
+            return self.http_fetch(url)
+        except FetchError:
+            self.used_browser = True
+            return self.browser_fetch(url)
