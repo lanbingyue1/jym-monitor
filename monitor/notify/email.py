@@ -99,7 +99,7 @@ def _parse_addresses(raw: str) -> list[str]:
 
 
 def _price_text(item: Listing) -> str:
-    return "价格未知" if item.price is None else f"¥{item.price}"
+    return "价格未知" if item.price is None else f"¥{item.price:,}"
 
 
 def _plain_body(
@@ -135,78 +135,191 @@ def _plain_body(
     return "\n".join(lines).rstrip() + "\n"
 
 
+# Email clients ignore webfonts and most CSS resets; system fonts and inline
+# styles are the only things that render consistently on phones.
+_FONT = (
+    "-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB',"
+    "'Microsoft YaHei',sans-serif"
+)
+
+
 def _html_body(
     items: list[Listing],
     include_images: bool = True,
     include_safe_report: bool = True,
 ) -> str:
-    rows: list[str] = []
-    details: list[str] = []
-    # Only add the 上架时间 column when at least one item has a publication
-    # time; unknown times render as an empty cell rather than a placeholder.
-    show_published = any(item.published_at is not None for item in items)
-    for item in items:
-        title = html.escape(item.title)
-        if item.url.startswith(("http://", "https://")):
-            title = (
-                f'<a href="{html.escape(item.url, quote=True)}">{title}</a>'
-            )
-        elif item.url:
-            title = f"{title} ({html.escape(item.url)})"
-        published_cell = ""
-        if show_published:
-            published_cell = (
-                f"<td>{html.escape(published_text(item.published_at) or '')}</td>"
-            )
-        rows.append(
-            "<tr>"
-            f"<td>{title}</td>"
-            f"<td>{html.escape(_price_text(item))}</td>"
-            f"{published_cell}"
-            f"<td>{html.escape(extra_value(item, 'account'))}</td>"
-            f"<td>{html.escape(extra_value(item, 'server'))}</td>"
-            f"<td>{html.escape(extra_value(item, 'platform'))}</td>"
-            "</tr>"
-        )
-        details.append(_html_details(item, include_images, include_safe_report))
-
-    published_header = "<th>上架时间</th>" if show_published else ""
+    """Render a mobile-first HTML mail: one card per listing."""
+    cards = "".join(
+        _html_card(item, include_images, include_safe_report) for item in items
+    )
+    preheader = f"{len(items)} 件新商品：{items[0].title}"
     return (
-        "<html><body>"
-        "<h2>交易猫新品提醒</h2>"
-        '<table border="1" cellpadding="4" cellspacing="0">'
-        "<thead><tr><th>标题</th><th>价格</th>"
-        f"{published_header}"
-        "<th>账号</th><th>服务器</th><th>平台</th></tr></thead>"
-        "<tbody>"
-        + "".join(rows)
-        + "</tbody></table>"
-        + "".join(details)
-        + "</body></html>"
+        '<!DOCTYPE html><html lang="zh-CN"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="x-apple-disable-message-reformatting">'
+        "<title>交易猫新品提醒</title>"
+        "<style>@media only screen and (max-width:600px){"
+        ".wrap{padding:10px !important}"
+        ".card{padding:14px !important}"
+        ".title{font-size:17px !important}"
+        "}</style></head>"
+        f'<body style="margin:0;padding:0;background:#f2f3f5;font-family:{_FONT};">'
+        '<div style="display:none;max-height:0;overflow:hidden;opacity:0;'
+        f'color:transparent;">{html.escape(preheader)}</div>'
+        '<table role="presentation" width="100%" cellpadding="0" '
+        'cellspacing="0" style="background:#f2f3f5;">'
+        '<tr><td align="center" style="padding:16px 10px;">'
+        '<table role="presentation" width="100%" cellpadding="0" '
+        'cellspacing="0" style="max-width:600px;">'
+        '<tr><td style="padding:2px 4px 12px 4px;">'
+        '<table role="presentation" width="100%" cellpadding="0" '
+        'cellspacing="0"><tr>'
+        '<td style="font-size:18px;font-weight:700;color:#1f2329;">'
+        "交易猫新品提醒</td>"
+        '<td align="right" style="font-size:13px;color:#8f959e;'
+        f'white-space:nowrap;">{len(items)} 件</td>'
+        "</tr></table></td></tr>"
+        f"{cards}"
+        '<tr><td style="padding:6px 4px 0 4px;font-size:12px;'
+        'line-height:1.6;color:#a0a6ad;">'
+        "忍者必须死3 · 成品号 · 由 jym-monitor 自动发送"
+        "</td></tr>"
+        "</table></td></tr></table></body></html>"
     )
 
 
-def _html_details(
+def _html_card(
     item: Listing,
-    include_images: bool = True,
-    include_safe_report: bool = True,
+    include_images: bool,
+    include_safe_report: bool,
 ) -> str:
-    """Render the fields that do not fit the summary table."""
-    parts: list[str] = [f"<h3>{html.escape(item.title)}</h3>"]
+    """Render one listing as a self-contained card row pair."""
+    parts: list[str] = []
+    published = published_text(item.published_at)
+    time_cell = (
+        '<td style="font-size:12px;color:#8f959e;vertical-align:middle;">'
+        f"上架时间 {html.escape(published)}</td>"
+        if published
+        else "<td></td>"
+    )
+    parts.append(
+        '<table role="presentation" width="100%" cellpadding="0" '
+        'cellspacing="0"><tr>'
+        f"{time_cell}"
+        '<td align="right" style="font-size:22px;line-height:1.1;'
+        'font-weight:700;color:#e4393c;white-space:nowrap;">'
+        f"{html.escape(_price_text(item))}</td>"
+        "</tr></table>"
+    )
+
+    title = html.escape(item.title)
+    if _is_http(item.url):
+        title = (
+            f'<a href="{html.escape(item.url, quote=True)}" '
+            f'style="color:#1f2329;text-decoration:none;">{title}</a>'
+        )
+    parts.append(
+        '<div class="title" style="margin:8px 0 12px 0;font-size:16px;'
+        'line-height:1.45;font-weight:600;color:#1f2329;'
+        f'word-break:break-word;">{title}</div>'
+    )
+
+    parts.append(_html_attributes(item))
 
     points = sell_points_text(item)
     if points:
-        parts.append(f"<p>特点：{html.escape(points)}</p>")
+        parts.append(
+            '<div style="margin:12px 0 0 0;font-size:14px;line-height:1.5;'
+            'color:#1f2329;">'
+            '<span style="color:#8f959e;">特点：</span>'
+            f"{html.escape(points)}</div>"
+        )
     note = seller_note(item)
     if note:
-        parts.append(f"<p>卖家说：{html.escape(note)}</p>")
+        parts.append(
+            '<div style="margin:10px 0 0 0;padding:10px 12px;'
+            'background:#fff7e8;border-radius:8px;font-size:14px;'
+            'line-height:1.55;color:#8a5a00;">'
+            '<span style="color:#b26a00;font-weight:600;">卖家说：</span>'
+            f"{html.escape(note)}</div>"
+        )
     if include_safe_report:
-        for line in safe_report_lines(item.safe_report):
-            parts.append(f"<p>{html.escape(line)}</p>")
+        report = safe_report_lines(item.safe_report)
+        if report:
+            body = "<br>".join(html.escape(line) for line in report)
+            parts.append(
+                '<div style="margin:10px 0 0 0;padding:10px 12px;'
+                'background:#eef7ee;border-radius:8px;font-size:13px;'
+                f'line-height:1.6;color:#2f6b2f;">{body}</div>'
+            )
     if include_images and item.images:
         links = " ".join(
-            f'<a href="{html.escape(url, quote=True)}">图{index}</a>'
+            f'<a href="{html.escape(url, quote=True)}" '
+            f'style="color:#1677ff;text-decoration:none;">图{index}</a>'
             for index, url in enumerate(item.images, 1)
         )
-        parts.append(f"<p>图片：{links}</p>")
-    return "".join(parts) if len(parts) > 1 else ""
+        parts.append(
+            '<div style="margin:10px 0 0 0;font-size:13px;color:#646a73;">'
+            f"图片：{links}</div>"
+        )
+
+    if _is_http(item.url):
+        parts.append(
+            '<table role="presentation" width="100%" cellpadding="0" '
+            'cellspacing="0" style="margin:14px 0 0 0;"><tr>'
+            '<td align="center" style="background:#1677ff;'
+            'border-radius:8px;">'
+            f'<a href="{html.escape(item.url, quote=True)}" '
+            'style="display:block;padding:12px 16px;font-size:15px;'
+            'font-weight:600;color:#ffffff;text-decoration:none;">'
+            "查看商品详情 →</a></td></tr></table>"
+        )
+    elif item.url:
+        parts.append(
+            '<div style="margin:10px 0 0 0;font-size:12px;color:#8f959e;'
+            f'word-break:break-all;">{html.escape(item.url)}</div>'
+        )
+
+    return (
+        '<tr><td class="card" style="padding:16px;background:#ffffff;'
+        'border:1px solid #e5e6eb;border-radius:12px;">'
+        + "".join(parts)
+        + "</td></tr>"
+        '<tr><td style="height:12px;line-height:12px;font-size:0;">'
+        "&nbsp;</td></tr>"
+    )
+
+
+def _html_attributes(item: Listing) -> str:
+    """Render 账号 / 平台 / 服务器 as label-value rows, readable on a phone."""
+    rows = (
+        ("账号", extra_value(item, "account")),
+        ("平台", extra_value(item, "platform")),
+        ("服务器", extra_value(item, "server")),
+    )
+    cells: list[str] = []
+    last = len(rows) - 1
+    for index, (label, value) in enumerate(rows):
+        if index == 0:
+            padding = "10px 12px 4px 12px"
+        elif index == last:
+            padding = "4px 12px 10px 12px"
+        else:
+            padding = "4px 12px"
+        cells.append(
+            f'<tr><td style="padding:{padding};font-size:12px;color:#8f959e;'
+            f'width:56px;vertical-align:top;">{label}</td>'
+            f'<td style="padding:{padding};font-size:14px;color:#1f2329;">'
+            f"{html.escape(value)}</td></tr>"
+        )
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" '
+        'cellspacing="0" style="background:#f7f8fa;border-radius:8px;">'
+        + "".join(cells)
+        + "</table>"
+    )
+
+
+def _is_http(url: str) -> bool:
+    return url.startswith(("http://", "https://"))

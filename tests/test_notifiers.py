@@ -1093,10 +1093,10 @@ def test_email_body_includes_account_note_report_and_images(monkeypatch):
     assert "图片2：https://img.test/2.jpg" in body
 
     html_body = message_part(created[0].message, "html")
-    assert "<th>账号</th>" in html_body
+    assert ">账号<" in html_body
     assert "小米帐号" in html_body
     assert 'href="https://img.test/1.jpg"' in html_body
-    assert "卖家说：血影全皮，有通行证" in html_body
+    assert "卖家说：" in html_body and "血影全皮，有通行证" in html_body
 
 
 def test_feishu_retries_without_inline_images_when_card_rejected(
