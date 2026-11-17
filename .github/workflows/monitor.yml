@@ -6,7 +6,7 @@ name: monitor
   workflow_dispatch:
     inputs:
       test_notify:
-        description: "只发送一条测试消息（不抓取、不写状态）"
+        description: "用筛选后最新一条商品发送测试消息（不写状态）"
         type: boolean
         default: false
 

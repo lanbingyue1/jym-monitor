@@ -4,6 +4,7 @@ import copy
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -11,7 +12,7 @@ import yaml
 from monitor import __main__ as cli
 from monitor import healthcheck
 from monitor.errors import ConfigError, FetchError, NotifyError, StateError
-from monitor.models import Listing
+from monitor.models import Listing, SafeReport
 from monitor.state import new_state
 
 CONFIG = "sites:\n  jiaoyimao:\n    enabled: true\n    urls: [u]\n"
@@ -413,15 +414,40 @@ def test_ping_swallows_exceptions(monkeypatch, capsys):
 # Test notification
 # ---------------------------------------------------------------------------
 
+CONFIG_FILTERED = CONFIG + "    filters:\n      price_min: 100\n"
+CONFIG_FILTERED_TRANSFER = (
+    CONFIG_FILTERED + "      require_account_transfer: true\n"
+)
+
+
+class DetailAdapter(FakeAdapter):
+    """Fake adapter whose detail pages report a configurable 「账号转移」."""
+
+    def __init__(self, items=(), statuses=None):
+        super().__init__(items)
+        self.statuses = statuses or {}
+        self.details = []
+
+    def fetch_detail(self, listing):
+        self.details.append(listing.item_id)
+        status = self.statuses.get(listing.item_id, "")
+        return replace(listing, safe_report=SafeReport(account_transfer=status))
+
 
 class FailingNotifier(FakeNotifier):
     name = "email"
+
+    def send(self, items):
+        raise NotifyError("email delivery failed: SMTPAuthenticationError")
 
     def send_text(self, text, *, subject=None):
         raise NotifyError("email delivery failed: SMTPAuthenticationError")
 
 
-def test_test_notify_sends_through_every_channel(monkeypatch, tmp_path, capsys):
+def test_test_notify_sends_newest_matching_item(monkeypatch, tmp_path, capsys):
+    newest = item("2", title="新商品", price=200, url="https://x/2")
+    older = item("1", title="旧商品", price=200, url="https://x/1")
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [FakeAdapter([newest, older])])
     first, second = FakeNotifier(), FakeNotifier()
     second.name = "email"
     monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [first, second])
@@ -430,20 +456,71 @@ def test_test_notify_sends_through_every_channel(monkeypatch, tmp_path, capsys):
     code = cli.main(["--config", str(path), "--test-notify"], env={})
 
     assert code == 0
-    assert len(first.texts) == 1 and len(second.texts) == 1
-    assert "发送成功" in output_of(capsys)
+    assert first.items == [newest] and second.items == [newest]
+    assert "feishu 发送成功" in output_of(capsys)
+
+
+def test_test_notify_applies_price_filter(monkeypatch, tmp_path):
+    cheap = item("1", title="太便宜", price=50)
+    good = item("2", title="符合价格", price=200)
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [FakeAdapter([cheap, good])])
+    sent = FakeNotifier()
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [sent])
+    path = write_config(tmp_path, CONFIG_FILTERED)
+
+    assert cli.main(["--config", str(path), "--test-notify"], env={}) == 0
+    assert [entry.item_id for entry in sent.items] == ["2"]
+
+
+def test_test_notify_requires_account_transfer(monkeypatch, tmp_path):
+    no = item("1", title="不能转移", price=200)
+    yes = item("2", title="可以转移", price=200)
+    adapter = DetailAdapter([no, yes], {"1": "否", "2": "是"})
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [adapter])
+    sent = FakeNotifier()
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [sent])
+    path = write_config(tmp_path, CONFIG_FILTERED_TRANSFER)
+
+    assert cli.main(["--config", str(path), "--test-notify"], env={}) == 0
+    assert [entry.item_id for entry in sent.items] == ["2"]
+    assert sent.items[0].safe_report.account_transfer == "是"
+    assert adapter.details == ["1", "2"]
+
+
+def test_test_notify_falls_back_to_text_without_match(monkeypatch, tmp_path, capsys):
+    cheap = item("1", title="太便宜", price=50)
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [FakeAdapter([cheap])])
+    sent = FakeNotifier()
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [sent])
+    path = write_config(tmp_path, CONFIG_FILTERED)
+
+    assert cli.main(["--config", str(path), "--test-notify"], env={}) == 0
+    assert sent.items == []
+    assert len(sent.texts) == 1
+    assert "文本测试消息" in output_of(capsys)
+
+
+def test_test_notify_fetch_failure_falls_back_to_text(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [FailingAdapter()])
+    sent = FakeNotifier()
+    monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [sent])
+    path = write_config(tmp_path, CONFIG_WITH_NOTIFY)
+
+    assert cli.main(["--config", str(path), "--test-notify"], env={}) == 0
+    assert len(sent.texts) == 1
 
 
 def test_test_notify_reports_failure_and_continues(monkeypatch, tmp_path, capsys):
     failing, ok = FailingNotifier(), FakeNotifier()
     ok.name = "feishu"
+    monkeypatch.setattr(cli, "build_adapters", lambda cfg: [FakeAdapter([item()])])
     monkeypatch.setattr(cli, "build_notifiers", lambda cfg, env: [failing, ok])
     path = write_config(tmp_path, CONFIG_WITH_NOTIFY)
 
     code = cli.main(["--config", str(path), "--test-notify"], env={})
 
     assert code == 1
-    assert ok.texts, "a failing channel must not stop the others"
+    assert ok.items, "a failing channel must not stop the others"
     assert "email 发送失败" in output_of(capsys)
 
 

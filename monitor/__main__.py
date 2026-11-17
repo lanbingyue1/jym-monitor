@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Mapping
 
 from monitor.config import Config, load_config
-from monitor.errors import ConfigError, NotifyError, StateError
+from monitor.errors import ConfigError, FetchError, NotifyError, StateError
+from monitor.filters import matches
 from monitor.healthcheck import ping
-from monitor.notify import build_notifiers
+from monitor.models import Listing
+from monitor.notify import Notifier, build_notifiers
 from monitor.pipeline import RunResult, run_once
 from monitor.sites import build_adapters
+from monitor.sites.base import SiteAdapter
 from monitor.state import FileStateStore, GitHubStateStore
 
 _DEFAULT_CONFIG = "config.yaml"
@@ -59,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--test-notify",
         action="store_true",
-        help="给每个已配置的通知渠道发一条测试消息，不抓取、不写状态",
+        help="用筛选后最新一条商品给每个渠道发一条测试消息，不写状态",
     )
     return parser
 
@@ -89,14 +92,20 @@ def _dry_run(config: Config, env: Mapping[str, str]) -> int:
 
 _TEST_TEXT = "交易猫监控测试消息：收到这条说明该通知渠道配置正确。"
 _TEST_SUBJECT = "交易猫监控测试消息"
+# Detail pages are fetched one at a time; stop after this many candidates so a
+# manually triggered test cannot run for minutes.
+_SAMPLE_CANDIDATE_LIMIT = 10
 
 
 def _test_notify(config: Config, env: Mapping[str, str]) -> int:
-    """Send one test message through every configured channel.
+    """Send one message that shows what a real notification looks like.
 
-    Used to verify SMTP/webhook credentials without waiting for a new listing.
-    Touches no state and needs no ``GITHUB_TOKEN``; every channel is attempted
-    even when an earlier one fails.
+    The message is built from the newest listing that passes the configured
+    filters (and, with ``require_account_transfer``, whose detail page says
+    「账号转移」= 是).  When nothing qualifies, a plain text message is sent so
+    the channels can still be verified.  No state is read or written and
+    ``GITHUB_TOKEN`` is not needed; every channel is attempted even when an
+    earlier one fails.
     """
     try:
         notifiers = build_notifiers(config.notify, env)
@@ -107,6 +116,83 @@ def _test_notify(config: Config, env: Mapping[str, str]) -> int:
         print("没有启用任何通知渠道", file=sys.stderr)
         return 1
 
+    try:
+        adapters = build_adapters(config)
+    except ConfigError as exc:
+        print(f"站点配置失败: {exc}", file=sys.stderr)
+        return 1
+
+    sample = _pick_sample(config, adapters)
+    if sample is None:
+        print("没有符合筛选条件的商品，改为发送文本测试消息", file=sys.stderr)
+        return _send_text_test(notifiers)
+
+    print(f"使用样例商品：{sample.title} | {_price_text(sample)} | {sample.url}")
+    failed: list[str] = []
+    for notifier in notifiers:
+        try:
+            notifier.send([sample])
+        except NotifyError as exc:
+            print(f"{notifier.name} 发送失败: {exc}", file=sys.stderr)
+            failed.append(notifier.name)
+        else:
+            print(f"{notifier.name} 发送成功")
+    return 1 if failed else 0
+
+
+def _pick_sample(config: Config, adapters: list[SiteAdapter]) -> Listing | None:
+    """Return the newest listing that passes the configured filters.
+
+    Adapters return listings in site order, which is newest first.  Items are
+    filtered with the same rules as a real run; when 「账号转移」 is required,
+    detail pages are read until a matching item is found (bounded by
+    ``_SAMPLE_CANDIDATE_LIMIT``).
+    """
+    by_site = {adapter.site_id: adapter for adapter in adapters}
+    for site_id, site_cfg in config.sites.items():
+        if not site_cfg.enabled:
+            continue
+        adapter = by_site.get(site_id)
+        if adapter is None:
+            continue
+        try:
+            listings = list(adapter.fetch(frozenset()))
+        except FetchError as exc:
+            print(f"{site_id}: 抓取失败: {exc}", file=sys.stderr)
+            continue
+
+        candidates = [item for item in listings if matches(item, site_cfg.filters)]
+        if not candidates:
+            continue
+        if not site_cfg.filters.require_account_transfer:
+            return candidates[0]
+
+        fetch_detail = getattr(adapter, "fetch_detail", None)
+        if fetch_detail is None:
+            print(f"{site_id}: 适配器不支持详情页，「账号转移」无法筛选", file=sys.stderr)
+            continue
+        if len(candidates) > _SAMPLE_CANDIDATE_LIMIT:
+            print(
+                f"{site_id}: 只检查最新的 {_SAMPLE_CANDIDATE_LIMIT} 条候选商品",
+                file=sys.stderr,
+            )
+        for item in candidates[:_SAMPLE_CANDIDATE_LIMIT]:
+            try:
+                detail = fetch_detail(item)
+            except FetchError as exc:
+                print(
+                    f"{site_id}: 详情抓取失败 {item.item_id}: {exc}", file=sys.stderr
+                )
+                continue
+            status = detail.safe_report.account_transfer if detail.safe_report else ""
+            if status == "是":
+                return detail
+            print(f"{site_id}: 跳过 {item.item_id}（账号转移={status or '未知'}）")
+    return None
+
+
+def _send_text_test(notifiers: list[Notifier]) -> int:
+    """Fallback: send a plain text test message through every channel."""
     failed: list[str] = []
     for notifier in notifiers:
         try:
@@ -117,6 +203,10 @@ def _test_notify(config: Config, env: Mapping[str, str]) -> int:
         else:
             print(f"{notifier.name} 发送成功")
     return 1 if failed else 0
+
+
+def _price_text(item: Listing) -> str:
+    return "价格未知" if item.price is None else f"¥{item.price}"
 
 
 def _real_run(config: Config, env: Mapping[str, str]) -> int:
