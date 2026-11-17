@@ -30,6 +30,7 @@ def build_notifiers(cfg: NotifyConfig, env: Mapping[str, str]) -> list[Notifier]
                     app_id=app_id,
                     app_secret=app_secret,
                     include_images=cfg.include_images,
+                    include_safe_report=cfg.include_safe_report,
                 )
             )
         elif channel == "email":
@@ -53,6 +54,7 @@ def build_notifiers(cfg: NotifyConfig, env: Mapping[str, str]) -> list[Notifier]
                     mail_to,
                     use_ssl=port == 465,
                     include_images=cfg.include_images,
+                    include_safe_report=cfg.include_safe_report,
                 )
             )
         else:

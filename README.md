@@ -149,7 +149,7 @@ notify:
 - **上架时间**：北京时间 `YYYY-MM-DD HH:MM`
 - **特点**：搜索结果里的角色/皮肤等卖点标签
 - **卖家说**：卖家填写的商品描述（可能为空）
-- **安全报告**：账号安全等级（如 `SSS 100%`）以及「卖家信用认证 / 交易安全保障 / 售后安全保障」的各项状态
+- **安全报告**：账号安全等级（如 `SSS 100%`）以及「卖家信用认证 / 交易安全保障 / 售后安全保障」的各项状态；`notify.include_safe_report: false` 时整段不显示（详情页仍会抓取，用于「账号转移」等筛选）
 - **图片**：交易猫提供的验号截图与游戏截图（内联或链接，见上一节）；`notify.include_images: false` 时整条通知不包含图片，也不会上传/下载图片
 
 #### 本地真实运行（可选）
@@ -212,6 +212,7 @@ notify:
 | `notify.channels` | `[feishu]` | 通知渠道，可组合 `feishu` / `email` |
 | `notify.batch_size` | `10` | 单条通知最多包含几件商品，超出会拆批 |
 | `notify.include_images` | `true` | 是否在通知里加载/显示商品图片。`false` 时不下载、不上传、不显示图片（代码保留，改回 `true` 即恢复）。当前为 `false` |
+| `notify.include_safe_report` | `true` | 是否在通知里显示「安全报告」。`false` 时不显示，但详情页仍会抓取（「账号转移」筛选依赖它）。当前为 `false` |
 | `alerts.consecutive_failures_before_alert` | `3` | 连续失败多少次后发一次异常告警 |
 | `alerts.min_alert_interval_minutes` | `180` | 同类告警的最小间隔（分钟） |
 | `bootstrap.notify_on_first_run` | `true` | 首次运行是否发送「监控已启动」消息 |

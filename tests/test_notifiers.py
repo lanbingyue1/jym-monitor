@@ -993,12 +993,49 @@ def test_build_feishu_notifier_accepts_app_credentials():
     assert len(notifiers) == 1
 
 
-def test_build_notifiers_passes_include_images_flag():
-    cfg = NotifyConfig(channels=("feishu",), batch_size=10, include_images=False)
+def test_build_notifiers_passes_content_flags():
+    cfg = NotifyConfig(
+        channels=("feishu",),
+        batch_size=10,
+        include_images=False,
+        include_safe_report=False,
+    )
     notifiers = build_notifiers(
         cfg, {"FEISHU_WEBHOOK": "https://hook"}
     )
     assert notifiers[0].include_images is False
+    assert notifiers[0].include_safe_report is False
+
+
+def test_feishu_include_safe_report_off_omits_report(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook", include_safe_report=False).send([RICH])
+
+    content = sent["json"]["card"]["elements"][0]["text"]["content"]
+    assert "卖家说：血影全皮，有通行证" in content
+    assert "安全报告" not in content
+    assert "账号转移" not in content
+
+
+def test_email_include_safe_report_off_omits_report(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+
+    EmailNotifier(
+        "smtp.qq.com", 465, "u", "p", "me@example.com", include_safe_report=False
+    ).send([RICH])
+
+    body = message_body(created[0].message)
+    assert "卖家说：血影全皮，有通行证" in body
+    assert "安全报告" not in body
+
+    html_body = message_part(created[0].message, "html")
+    assert "安全报告" not in html_body
 
 
 def test_feishu_include_images_off_skips_uploads_and_links(monkeypatch):

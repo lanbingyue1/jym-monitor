@@ -40,6 +40,9 @@ class NotifyConfig:
     # When off, notifications omit listing images entirely (no inline uploads,
     # no image links).  The image code stays in place for when it is turned on.
     include_images: bool = True
+    # When off, notifications omit the 安全报告 lines.  Detail pages are still
+    # fetched because filters (e.g. 账号转移) may depend on them.
+    include_safe_report: bool = True
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,11 @@ def load_config(path: str | Path) -> Config:
             batch_size=notify_raw.get("batch_size", 10),
             include_images=_as_bool(
                 notify_raw.get("include_images"), "notify.include_images", True
+            ),
+            include_safe_report=_as_bool(
+                notify_raw.get("include_safe_report"),
+                "notify.include_safe_report",
+                True,
             ),
         ),
         alerts=AlertConfig(

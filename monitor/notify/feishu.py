@@ -54,10 +54,12 @@ class FeishuNotifier:
         app_id: str | None = None,
         app_secret: str | None = None,
         include_images: bool = True,
+        include_safe_report: bool = True,
     ):
         self.webhook = webhook
         self.timeout = timeout
         self.include_images = include_images
+        self.include_safe_report = include_safe_report
         self._uploader = (
             FeishuImageUploader(app_id.strip(), app_secret.strip(), timeout)
             if app_id and app_secret
@@ -73,7 +75,10 @@ class FeishuNotifier:
             elements.append(
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": _item_markdown(item)},
+                    "text": {
+                        "tag": "lark_md",
+                        "content": _item_markdown(item, self.include_safe_report),
+                    },
                 }
             )
             if self.include_images:
@@ -104,7 +109,10 @@ class FeishuNotifier:
             elements.append(
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": _item_markdown(item)},
+                    "text": {
+                        "tag": "lark_md",
+                        "content": _item_markdown(item, self.include_safe_report),
+                    },
                 }
             )
             elements.extend(self._image_elements(item, 0))
@@ -370,7 +378,7 @@ def _json_payload(
     return payload
 
 
-def _item_markdown(item: Listing) -> str:
+def _item_markdown(item: Listing, include_safe_report: bool = True) -> str:
     price = "价格未知" if item.price is None else f"¥{item.price}"
     lines = [f"**[{item.title}]({item.url})**"]
     lines.append(
@@ -387,5 +395,6 @@ def _item_markdown(item: Listing) -> str:
     note = seller_note(item)
     if note:
         lines.append(f"卖家说：{note}")
-    lines.extend(safe_report_lines(item.safe_report))
+    if include_safe_report:
+        lines.extend(safe_report_lines(item.safe_report))
     return "\n".join(lines)
