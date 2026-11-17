@@ -22,6 +22,9 @@ _CARD_TITLE = "交易猫新品提醒"
 _TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 _IMAGE_URL = "https://open.feishu.cn/open-apis/im/v1/images"
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_UPLOAD_HINTS = {
+    234007: "应用未启用机器人能力，请在「添加应用能力」中启用机器人并发布版本",
+}
 _DOWNLOAD_ATTEMPTS = 2
 _INLINE_IMAGE_LIMIT = 9
 # Uploads are sequential HTTP round-trips; cap the whole card so a large burst
@@ -218,7 +221,7 @@ class FeishuImageUploader:
         if not 200 <= response.status_code < 300:
             raise NotifyError(
                 f"feishu image upload returned HTTP {response.status_code}"
-                f"{_code_suffix(response)}"
+                f"{_code_suffix(response, _UPLOAD_HINTS)}"
             )
         payload = _json_payload(response, "feishu image upload")
         data = payload.get("data")
@@ -308,14 +311,19 @@ def _card_payload(elements: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _code_suffix(response) -> str:
+def _code_suffix(
+    response, hints: dict[int, str] | None = None
+) -> str:
     """Return ``" (code N)"`` when a Feishu error body carries a code."""
     try:
         payload = response.json()
     except ValueError:
         return ""
     code = payload.get("code") if isinstance(payload, dict) else None
-    return f" (code {code})" if isinstance(code, int) else ""
+    if not isinstance(code, int):
+        return ""
+    hint = (hints or {}).get(code)
+    return f" (code {code}（{hint}）)" if hint else f" (code {code})"
 
 
 def _json_payload(
