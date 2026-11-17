@@ -254,7 +254,7 @@ def test_github_store_non_200_raises(monkeypatch):
         GitHubStateStore("o/r", "tok").load()
 
 
-def test_github_store_empty_content_returns_new_state(monkeypatch):
+def test_github_store_sha_with_empty_content_raises(monkeypatch):
     class R:
         status_code = 200
 
@@ -262,7 +262,8 @@ def test_github_store_empty_content_returns_new_state(monkeypatch):
             return {"content": "", "sha": "x"}
 
     monkeypatch.setattr("monitor.state.requests.get", lambda *a, **k: R())
-    assert GitHubStateStore("o/r", "tok").load() == new_state()
+    with pytest.raises(StateError):
+        GitHubStateStore("o/r", "tok").load()
 
 
 def test_github_store_rejects_corrupt_content(monkeypatch):

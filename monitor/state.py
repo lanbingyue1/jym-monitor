@@ -258,6 +258,14 @@ class GitHubStateStore:
         self._sha = sha if isinstance(sha, str) else None
         content = payload.get("content")
         if not content:
+            if self._sha:
+                # A file record with a sha but no inline content (for example a
+                # file larger than 1 MB, or ``encoding: "none"``) is not the
+                # same as a missing file: resetting state here would lose the
+                # anchor and every seen ID, so surface it loudly instead.
+                raise StateError(
+                    "GitHub state file is present but has no inline content"
+                )
             return new_state()
         try:
             raw = base64.b64decode(content).decode("utf-8")
