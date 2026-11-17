@@ -722,8 +722,8 @@ def test_feishu_uploads_images_when_app_credentials_given(monkeypatch):
                     "expire": 7200,
                 }
             )
-        if "im/v1/image/create" in url:
-            key = f"img-{len([p for p in posts if 'image/create' in p['url']])}"
+        if "im/v1/images" in url:
+            key = f"img-{len([p for p in posts if 'im/v1/images' in p['url']])}"
             return FakeResponse(payload={"code": 0, "data": {"image_key": key}})
         return FakeResponse()
 
@@ -735,7 +735,7 @@ def test_feishu_uploads_images_when_app_credentials_given(monkeypatch):
     ).send([RICH])
 
     assert downloads == ["https://img.test/1.jpg", "https://img.test/2.jpg"]
-    uploads = [p for p in posts if "image/create" in p["url"]]
+    uploads = [p for p in posts if "im/v1/images" in p["url"]]
     assert len(uploads) == 2
     assert uploads[0]["headers"] == {"Authorization": "Bearer t-1"}
     assert uploads[0]["data"] == {"image_type": "message"}
@@ -761,7 +761,7 @@ def test_feishu_retries_image_download_after_connect_timeout(monkeypatch):
             return FakeResponse(
                 payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
             )
-        if "im/v1/image/create" in url:
+        if "im/v1/images" in url:
             return FakeResponse(payload={"code": 0, "data": {"image_key": "img-1"}})
         sent["json"] = json
         return FakeResponse()
@@ -816,7 +816,7 @@ def test_feishu_strips_whitespace_from_app_credentials(monkeypatch):
             return FakeResponse(
                 payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
             )
-        if "im/v1/image/create" in url:
+        if "im/v1/images" in url:
             return FakeResponse(payload={"code": 0, "data": {"image_key": "k"}})
         return FakeResponse()
 
@@ -835,6 +835,33 @@ def test_feishu_strips_whitespace_from_app_credentials(monkeypatch):
     ).send([one])
 
     assert auth == {"app_id": "cli_x", "app_secret": "secret"}
+
+
+def test_feishu_upload_error_http_status_includes_feishu_code(monkeypatch, capsys):
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        if "im/v1/images" in url:
+            return FakeResponse(
+                status_code=400, payload={"code": 99991672, "msg": "no permission"}
+            )
+        return FakeResponse()
+
+    def fake_get(url, timeout=None):
+        return FakeDownload()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([RICH])
+
+    err = capsys.readouterr().err
+    assert "HTTP 400 (code 99991672)" in err
+    assert "no permission" not in err
 
 
 def test_feishu_falls_back_to_links_when_upload_fails(monkeypatch, capsys):
@@ -875,7 +902,7 @@ def test_feishu_keeps_links_for_images_beyond_inline_limit(monkeypatch):
             return FakeResponse(
                 payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
             )
-        if "image/create" in url:
+        if "im/v1/images" in url:
             return FakeResponse(payload={"code": 0, "data": {"image_key": "k"}})
         sent["json"] = json
         return FakeResponse()
@@ -958,7 +985,7 @@ def test_feishu_retries_without_inline_images_when_card_rejected(
             return FakeResponse(
                 payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
             )
-        if "image/create" in url:
+        if "im/v1/images" in url:
             return FakeResponse(payload={"code": 0, "data": {"image_key": "bad"}})
         posts.append(json)
         has_img = any(e.get("tag") == "img" for e in json["card"]["elements"])

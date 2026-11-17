@@ -20,7 +20,7 @@ from monitor.notify.base import (
 
 _CARD_TITLE = "交易猫新品提醒"
 _TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-_IMAGE_URL = "https://open.feishu.cn/open-apis/im/v1/image/create"
+_IMAGE_URL = "https://open.feishu.cn/open-apis/im/v1/images"
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _DOWNLOAD_ATTEMPTS = 2
 _INLINE_IMAGE_LIMIT = 9
@@ -218,6 +218,7 @@ class FeishuImageUploader:
         if not 200 <= response.status_code < 300:
             raise NotifyError(
                 f"feishu image upload returned HTTP {response.status_code}"
+                f"{_code_suffix(response)}"
             )
         payload = _json_payload(response, "feishu image upload")
         data = payload.get("data")
@@ -274,6 +275,7 @@ class FeishuImageUploader:
         if not 200 <= response.status_code < 300:
             raise NotifyError(
                 f"feishu app auth returned HTTP {response.status_code}"
+                f"{_code_suffix(response)}"
             )
         payload = _json_payload(
             response,
@@ -304,6 +306,16 @@ def _card_payload(elements: list[dict[str, Any]]) -> dict[str, Any]:
             "elements": elements,
         },
     }
+
+
+def _code_suffix(response) -> str:
+    """Return ``" (code N)"`` when a Feishu error body carries a code."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    code = payload.get("code") if isinstance(payload, dict) else None
+    return f" (code {code})" if isinstance(code, int) else ""
 
 
 def _json_payload(
