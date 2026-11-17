@@ -11,7 +11,7 @@ sites:
       servers: []
       include_keywords: []  # 匹配 title + description + sellPoints
       exclude_keywords: []
-      require_account_transfer: true  # 只要详情页「账号转移 = 是」的商品
+      require_account_transfer: false  # 临时关闭（演示推送格式用），演示后恢复 true
 notify:
   channels: [feishu]        # 可选 feishu / email，可同时开启
   batch_size: 10

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import copy
 import json
-import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -196,14 +195,6 @@ class _Runner:
         listings: list[Listing],
     ) -> None:
         new_items = [item for item in listings if is_new(item, site_state)]
-        if site_cfg.filters.require_account_transfer and not self.dry_run:
-            for item in new_items:
-                print(
-                    f"DEBUG {site_id} {item.item_id} "
-                    f"platform={item.extra.get('platform')!r} "
-                    f"list_ok={matches(item, site_cfg.filters)}",
-                    file=sys.stderr,
-                )
         actionable = [item for item in new_items if matches(item, site_cfg.filters)]
         actionable = self._enrich(site_id, adapter, actionable)
         actionable, retry = self._filter_account_transfer(
@@ -299,10 +290,6 @@ class _Runner:
         retry: set[str] = set()
         for item in items:
             status = item.safe_report.account_transfer if item.safe_report else ""
-            print(
-                f"DEBUG {site_id} {item.item_id} 账号转移={status!r}",
-                file=sys.stderr,
-            )
             if status == "是":
                 kept.append(item)
             elif not status:
