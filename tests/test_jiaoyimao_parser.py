@@ -6,6 +6,16 @@ from monitor.sites.jiaoyimao import parse_listings, parse_published_at, is_punis
 
 FIXTURE = Path(__file__).parent / "fixtures" / "jiaoyimao_list.html"
 
+
+def _html_with_goods(goods_list):
+    payload = {
+        "pageInitialProps": {
+            "initialData": {"goodsListData": {"goodsList": goods_list}}
+        }
+    }
+    return "<script>window.__INITIAL_DATA__=" + json.dumps(payload) + ";</script>"
+
+
 def test_parse_real_fixture():
     items = parse_listings(FIXTURE.read_text(encoding="utf-8"))
     assert len(items) == 16
@@ -39,3 +49,35 @@ def test_missing_initial_data_raises():
 def test_detect_punish_page():
     assert is_punish('<script>var url=".../_____tmd_____/punish?x5secdata=abc"</script>')
     assert not is_punish("<html>ok</html>")
+
+
+def test_missing_detail_url_uses_fallback():
+    html = _html_with_goods([{
+        "type": 8,
+        "data": {
+            "goodsId": 1793434810016540,
+            "title": "t",
+            "price": 1,
+            "serverName": "s",
+            "newPlatformName": "p",
+            "description": "d",
+            "sellPoints": [],
+        },
+    }])
+    items = parse_listings(html)
+    assert len(items) == 1
+    assert items[0].url == (
+        "https://www.jiaoyimao.com/jg1008016/1793434810016540.html"
+    )
+
+
+def test_malformed_type8_entry_raises():
+    html = _html_with_goods([{"type": 8, "data": {"title": "missing goodsId"}}])
+    with pytest.raises(ValueError):
+        parse_listings(html)
+
+
+def test_published_at_rejects_too_old_timestamp():
+    assert parse_published_at(
+        "1000000000000", now=datetime(2026, 11, 16, tzinfo=timezone.utc)
+    ) is None
