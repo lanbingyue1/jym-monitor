@@ -116,6 +116,24 @@ notify:
 
 飞书和邮件可同时开启；任一渠道失败不影响其它渠道。所有已启用渠道都失败的批次会留给下一轮重试。
 
+#### 邮件（QQ 邮箱为例）
+
+1. 登录 QQ 邮箱网页版 → **设置 → 账号**（新版界面在「账号与安全」）→ 找到「POP3/IMAP/SMTP 服务」，开启并生成**授权码**。
+2. 在仓库 Secrets 中逐个添加：
+
+| Secret | 值 |
+| --- | --- |
+| `SMTP_HOST` | `smtp.qq.com` |
+| `SMTP_PORT` | `465`（SSL；其它端口如 587 走 STARTTLS） |
+| `SMTP_USER` | 发件 QQ 邮箱，例如 `123456@qq.com` |
+| `SMTP_PASS` | 上一步生成的授权码（16 位，**不是** QQ 密码） |
+| `MAIL_TO` | 收件邮箱；多个用英文逗号分隔，可以填同一个 QQ 邮箱 |
+
+3. 确认 `config.yaml` 的 `notify.channels` 含 `email`（当前为 `[feishu, email]`）。
+4. 在手机 QQ 邮箱 App 中允许通知，否则邮件只会进收件箱、不会弹提醒。
+
+授权码等同于邮箱密码，只放在 GitHub Secrets 里；若怀疑泄露，在 QQ 邮箱设置中删除该授权码并重新生成，再更新 Secret。换成其它邮箱服务商时，只需改 `SMTP_HOST` / `SMTP_PORT` 等五项。
+
 #### 飞书群机器人
 
 在接收通知的群聊中：**群设置 → 群机器人 → 添加机器人 → 自定义机器人**，设置名称后复制 Webhook 地址填入 `FEISHU_WEBHOOK`。
@@ -209,7 +227,7 @@ notify:
 | `sites.jiaoyimao.filters.servers` | `[]` | 服务器白名单；空表示全部 |
 | `sites.jiaoyimao.filters.include_keywords` | `[]` | 必须命中的关键词，匹配标题、描述和卖点；空表示不过滤 |
 | `sites.jiaoyimao.filters.exclude_keywords` | `[]` | 排除关键词，优先级高于包含关键词 |
-| `notify.channels` | `[feishu]` | 通知渠道，可组合 `feishu` / `email` |
+| `notify.channels` | `[feishu]` | 通知渠道，可组合 `feishu` / `email`。当前配置为 `[feishu, email]` |
 | `notify.batch_size` | `10` | 单条通知最多包含几件商品，超出会拆批 |
 | `notify.include_images` | `true` | 是否在通知里加载/显示商品图片。`false` 时不下载、不上传、不显示图片（代码保留，改回 `true` 即恢复）。当前为 `false` |
 | `notify.include_safe_report` | `true` | 是否在通知里显示「安全报告」。`false` 时不显示，但详情页仍会抓取（「账号转移」筛选依赖它）。当前为 `false` |
@@ -232,7 +250,7 @@ notify:
 - 日志出现「`feishu image upload returned HTTP 400 (code 234007`」：应用没有启用「机器人」能力。开放平台 → 应用 →「添加应用能力」启用机器人，然后重新发布版本。
 - 日志出现「`feishu app auth returned code 21001`」：这是飞书侧的安全策略拦截，不是代码或凭据格式问题。检查应用是否已发布并启用、权限是否审核通过、安全设置里是否启用了 IP 白名单（Actions 出口 IP 不固定）；企业账号还需管理员在数据安全策略中放行该应用。此情况会自动降级为图片链接，通知本身不受影响。
 - 核对 Secret 名称是否完全一致。启用邮件时 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASS`、`MAIL_TO` **五项都要配置**，缺一项会在启动时直接失败。
-- 确认 `config.yaml` 的 `notify.channels` 包含预期渠道；当前默认只有 `feishu`，邮件需要手动加 `email`。
+- 确认 `config.yaml` 的 `notify.channels` 包含预期渠道；当前已同时启用 `feishu` 和 `email`，只想要一个渠道时改这一行。
 - 飞书：确认机器人仍在群里、Webhook 未失效，并关闭「签名校验」。
 - 邮件：确认使用的是邮箱授权码而非登录密码，并检查垃圾邮件目录。
 

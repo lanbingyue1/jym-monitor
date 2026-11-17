@@ -13,7 +13,7 @@ sites:
       exclude_keywords: []
       require_account_transfer: true  # 只要详情页「账号转移 = 是」的商品
 notify:
-  channels: [feishu]        # 可选 feishu / email，可同时开启
+  channels: [feishu, email] # 可选 feishu / email，可同时开启；email 需配好 SMTP_* 与 MAIL_TO
   batch_size: 10
   include_images: false     # false = 不加载/不显示商品图片；true = 恢复内联图片
   include_safe_report: false  # false = 通知里不显示「安全报告」；详情页仍会抓取用于筛选
