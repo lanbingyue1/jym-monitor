@@ -123,6 +123,11 @@ def _real_run(config: Config, env: Mapping[str, str]) -> int:
     elapsed = time.monotonic() - started
 
     _write_summary(env.get("GITHUB_STEP_SUMMARY"), _render_summary(result, elapsed))
+    print(
+        f"抓取 {result.fetched} · 新增 {result.new} · 通知 {result.notified}"
+        f" · 告警 {result.alerts_sent} · 错误 {len(result.errors)}"
+        f" · 警告 {len(result.warnings)}"
+    )
 
     for warning in result.warnings:
         print(f"警告: {warning}", file=sys.stderr)
