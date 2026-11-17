@@ -33,12 +33,14 @@ class FailingAdapter:
 class FakeNotifier:
     def __init__(self, name="feishu", fail=False):
         self.name, self.fail, self.items, self.texts = name, fail, [], []
+        self.text_subjects = []
     def send(self, items):
         if self.fail: raise NotifyError("x")
         self.items.extend(items)
-    def send_text(self, text):
+    def send_text(self, text, *, subject=None):
         if self.fail: raise NotifyError("x")
         self.texts.append(text)
+        self.text_subjects.append(subject)
 
 
 class BrokenStore:
@@ -61,6 +63,19 @@ def test_bootstrap_registers_without_item_push(tmp_path):
     r = run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
     assert r.bootstrap is True and n.items == [] and len(n.texts) == 1
     assert "1" in store.load()["sites"]["jiaoyimao"]["seen"]
+
+
+def test_bootstrap_text_uses_start_subject(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+    assert n.text_subjects == ["交易猫监控已启动"]
+
+
+def test_failure_alert_uses_default_alert_subject(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    c = cfg(threshold=1)
+    run_once(c, [FailingAdapter()], [n], store, now=NOW)
+    assert n.text_subjects == [None]
 
 
 def test_bootstrap_silent_when_configured(tmp_path):

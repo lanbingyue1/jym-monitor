@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import smtplib
+from datetime import datetime, timezone
 
 import pytest
 import requests
@@ -23,6 +24,9 @@ ITEM = Listing(
     None,
     {"server": "和之国", "platform": "安卓"},
 )
+# 2026-11-16 15:06:45 UTC == 2026-11-16 23:06 Beijing time.
+PUBLISHED = datetime(2026, 11, 16, 15, 6, 45, tzinfo=timezone.utc)
+PUBLISHED_BEIJING = "2026-11-16 23:06"
 
 
 class FakeResponse:
@@ -198,6 +202,95 @@ def test_feishu_send_text_payload(monkeypatch):
     }
 
 
+def test_feishu_send_text_ignores_subject(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, timeout=None):
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook").send_text(
+        "监控已启动，当前 16 条商品", subject="交易猫监控已启动"
+    )
+
+    assert sent["json"] == {
+        "msg_type": "text",
+        "content": {"text": "监控已启动，当前 16 条商品"},
+    }
+
+
+def test_feishu_card_includes_published_time_in_beijing(monkeypatch):
+    sent = {}
+    item = Listing(
+        "jiaoyimao",
+        "1794831310167680",
+        "有时间商品",
+        100,
+        "https://x.test/1",
+        PUBLISHED,
+        {},
+    )
+
+    def fake_post(url, json=None, timeout=None):
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook").send([item])
+
+    content = sent["json"]["card"]["elements"][0]["text"]["content"]
+    assert f"上架时间：{PUBLISHED_BEIJING}" in content
+
+
+def test_feishu_card_omits_published_time_when_unknown(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, timeout=None):
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    FeishuNotifier("https://hook").send([ITEM])
+
+    content = sent["json"]["card"]["elements"][0]["text"]["content"]
+    assert "上架时间" not in content
+
+
+def test_feishu_transport_error_does_not_leak_webhook(monkeypatch):
+    token = "SECRET-WEBHOOK-TOKEN"
+    webhook = f"https://open.feishu.cn/open-apis/bot/v2/hook/{token}"
+
+    def boom(*args, **kwargs):
+        raise requests.ConnectionError(f"failed to POST {webhook}")
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", boom)
+    with pytest.raises(NotifyError) as excinfo:
+        FeishuNotifier(webhook).send_text("x")
+
+    text = str(excinfo.value)
+    assert token not in text
+    assert webhook not in text
+    assert "ConnectionError" in text
+
+
+def test_feishu_api_error_does_not_echo_response_message(monkeypatch):
+    token = "SECRET-WEBHOOK-TOKEN"
+    webhook = f"https://open.feishu.cn/open-apis/bot/v2/hook/{token}"
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(payload={"code": 19001, "msg": f"bad {webhook}"})
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+    with pytest.raises(NotifyError) as excinfo:
+        FeishuNotifier(webhook).send_text("x")
+
+    text = str(excinfo.value)
+    assert token not in text
+    assert webhook not in text
+    assert "19001" in text
+
+
 def test_feishu_failure_raises(monkeypatch):
     monkeypatch.setattr(
         "monitor.notify.feishu.requests.post",
@@ -334,6 +427,68 @@ def test_email_send_text(monkeypatch):
     message = created[0].message
     assert message["Subject"] == "[监控异常] 交易猫监控"
     assert message_body(message).strip() == "抓取失败：超时"
+
+
+def test_email_send_text_custom_subject(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+
+    EmailNotifier("smtp.qq.com", 465, "u", "p", "me@example.com").send_text(
+        "监控已启动，当前 16 条商品", subject="交易猫监控已启动"
+    )
+
+    assert created[0].message["Subject"] == "交易猫监控已启动"
+
+
+def test_email_error_does_not_leak_recipients(monkeypatch):
+    class BrokenSMTP(FakeSMTP):
+        def send_message(self, message):
+            raise smtplib.SMTPRecipientsRefused(
+                {
+                    "a@example.com": (550, b"no such user"),
+                    "b@example.com": (550, b"no such user"),
+                }
+            )
+
+    monkeypatch.setattr("monitor.notify.email.smtplib.SMTP_SSL", BrokenSMTP)
+
+    with pytest.raises(NotifyError) as excinfo:
+        EmailNotifier(
+            "smtp.qq.com", 465, "u", "p", "a@example.com, b@example.com"
+        ).send_text("x")
+
+    text = str(excinfo.value)
+    assert "@" not in text
+    assert "a@example.com" not in text
+    assert "b@example.com" not in text
+    assert "SMTPRecipientsRefused" in text
+
+
+def test_email_body_includes_published_time_in_beijing(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+    item = Listing(
+        "jiaoyimao",
+        "1794831310167680",
+        "有时间商品",
+        100,
+        "https://x.test/1",
+        PUBLISHED,
+        {"server": "和之国", "platform": "安卓"},
+    )
+
+    EmailNotifier("smtp.qq.com", 465, "u", "p", "me@example.com").send([item])
+
+    assert f"上架时间：{PUBLISHED_BEIJING}" in message_body(created[0].message)
+    html_body = message_part(created[0].message, "html")
+    assert "上架时间" in html_body and PUBLISHED_BEIJING in html_body
+
+
+def test_email_body_omits_published_time_when_unknown(monkeypatch):
+    created = install_fake_smtp(monkeypatch, "SMTP_SSL")
+
+    EmailNotifier("smtp.qq.com", 465, "u", "p", "me@example.com").send([ITEM])
+
+    assert "上架时间" not in message_body(created[0].message)
+    assert "上架时间" not in message_part(created[0].message, "html")
 
 
 def test_email_send_empty_items_is_noop(monkeypatch):

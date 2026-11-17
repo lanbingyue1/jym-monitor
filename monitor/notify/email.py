@@ -8,6 +8,7 @@ from email.message import EmailMessage
 
 from monitor.errors import NotifyError
 from monitor.models import Listing
+from monitor.notify.base import published_text
 
 SMTP_TIMEOUT = 20
 ALERT_SUBJECT = "[监控异常] 交易猫监控"
@@ -45,9 +46,9 @@ class EmailNotifier:
         message.add_alternative(_html_body(items), subtype="html")
         self._deliver(message)
 
-    def send_text(self, text: str) -> None:
+    def send_text(self, text: str, *, subject: str | None = None) -> None:
         message = EmailMessage()
-        message["Subject"] = ALERT_SUBJECT
+        message["Subject"] = subject or ALERT_SUBJECT
         message["From"] = self.user
         message["To"] = ", ".join(self.to)
         message.set_content(text)
@@ -69,10 +70,13 @@ class EmailNotifier:
                     smtp.login(self.user, self.password)
                     smtp.send_message(message)
         except (smtplib.SMTPException, OSError) as exc:
-            recipients = ", ".join(self.to)
-            raise NotifyError(
-                f"email delivery to {recipients} failed: {exc}"
-            ) from exc
+            # Never interpolate the exception text or the recipient list: both
+            # can contain addresses and flow into public logs/summaries.
+            detail = type(exc).__name__
+            smtp_code = getattr(exc, "smtp_code", None)
+            if isinstance(smtp_code, int):
+                detail = f"{detail} (SMTP code {smtp_code})"
+            raise NotifyError(f"email delivery failed: {detail}") from exc
 
 
 def _parse_addresses(raw: str) -> list[str]:
@@ -95,6 +99,9 @@ def _plain_body(items: list[Listing]) -> str:
     for item in items:
         lines.append(item.title)
         lines.append(f"价格：{_price_text(item)}")
+        published = published_text(item.published_at)
+        if published:
+            lines.append(f"上架时间：{published}")
         lines.append(
             f"服务器：{_extra_text(item, 'server')}"
             f" · 平台：{_extra_text(item, 'platform')}"
@@ -106,6 +113,9 @@ def _plain_body(items: list[Listing]) -> str:
 
 def _html_body(items: list[Listing]) -> str:
     rows: list[str] = []
+    # Only add the 上架时间 column when at least one item has a publication
+    # time; unknown times render as an empty cell rather than a placeholder.
+    show_published = any(item.published_at is not None for item in items)
     for item in items:
         title = html.escape(item.title)
         if item.url.startswith(("http://", "https://")):
@@ -114,19 +124,28 @@ def _html_body(items: list[Listing]) -> str:
             )
         elif item.url:
             title = f"{title} ({html.escape(item.url)})"
+        published_cell = ""
+        if show_published:
+            published_cell = (
+                f"<td>{html.escape(published_text(item.published_at) or '')}</td>"
+            )
         rows.append(
             "<tr>"
             f"<td>{title}</td>"
             f"<td>{html.escape(_price_text(item))}</td>"
+            f"{published_cell}"
             f"<td>{html.escape(_extra_text(item, 'server'))}</td>"
             f"<td>{html.escape(_extra_text(item, 'platform'))}</td>"
             "</tr>"
         )
+    published_header = "<th>上架时间</th>" if show_published else ""
     return (
         "<html><body>"
         "<h2>交易猫新品提醒</h2>"
         '<table border="1" cellpadding="4" cellspacing="0">'
-        "<thead><tr><th>标题</th><th>价格</th><th>服务器</th><th>平台</th></tr></thead>"
+        "<thead><tr><th>标题</th><th>价格</th>"
+        f"{published_header}"
+        "<th>服务器</th><th>平台</th></tr></thead>"
         "<tbody>"
         + "".join(rows)
         + "</tbody></table></body></html>"

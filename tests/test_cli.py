@@ -61,7 +61,7 @@ class FakeNotifier:
     def send(self, items):
         self.items.extend(items)
 
-    def send_text(self, text):
+    def send_text(self, text, *, subject=None):
         self.texts.append(text)
 
 

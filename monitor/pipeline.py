@@ -39,6 +39,7 @@ from monitor.state import (
 
 _SITE_ALERT_PREFIX = "[监控异常]"
 _BOOTSTRAP_TEMPLATE = "监控已启动，当前 {count} 条商品"
+_BOOTSTRAP_SUBJECT = "交易猫监控已启动"
 
 
 @dataclass
@@ -154,7 +155,11 @@ class _Runner:
             mark_seen(site_state, listings, self.now)
             if self.config.bootstrap_notify:
                 text = _BOOTSTRAP_TEMPLATE.format(count=len(listings))
-                self._send_text_all(text, f"{site_id}: bootstrap notification failed")
+                self._send_text_all(
+                    text,
+                    f"{site_id}: bootstrap notification failed",
+                    subject=_BOOTSTRAP_SUBJECT,
+                )
         else:
             self._notify_new(site_id, site_cfg, site_state, listings)
 
@@ -239,7 +244,9 @@ class _Runner:
             )
         return delivered
 
-    def _send_text_all(self, text: str, context: str) -> bool:
+    def _send_text_all(
+        self, text: str, context: str, subject: str | None = None
+    ) -> bool:
         if self.dry_run:
             return True
         if not self.notifiers:
@@ -249,7 +256,7 @@ class _Runner:
         delivered = False
         for notifier in self.notifiers:
             try:
-                notifier.send_text(text)
+                notifier.send_text(text, subject=subject)
             except NotifyError as exc:
                 self.result.errors.append(
                     f"{context}: notifier {notifier.name} failed: {exc}"
