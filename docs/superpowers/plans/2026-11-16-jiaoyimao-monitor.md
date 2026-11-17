@@ -773,8 +773,8 @@ class FailingAdapter:
     def fetch(self, known_ids=frozenset()): raise FetchError("blocked")
 
 class FakeNotifier:
-    name = "feishu"
-    def __init__(self, fail=False): self.fail, self.items, self.texts = fail, [], []
+    def __init__(self, name="feishu", fail=False):
+        self.name, self.fail, self.items, self.texts = name, fail, [], []
     def send(self, items):
         if self.fail: raise NotifyError("x")
         self.items.extend(items)
@@ -842,7 +842,7 @@ def test_repeated_fetch_failures_alert(tmp_path):
 
 def test_channel_failure_alerted_via_other_channel(tmp_path):
     store = FileStateStore(tmp_path / "s.json")
-    bad, good = FakeNotifier(fail=True), FakeNotifier()
+    bad, good = FakeNotifier(name="feishu", fail=True), FakeNotifier(name="email")
     for i, items in enumerate((["1"], ["1", "2"], ["1", "2", "3"])):
         run_once(cfg(), [FakeAdapter([listing(x) for x in items])], [bad, good], store,
                  now=NOW + timedelta(minutes=5 * i))
