@@ -225,6 +225,7 @@ notify:
 
 - 先看 Actions 的运行日志和 Step summary，搜索「错误」「警告」或「notifier」；通知失败通常会在日志中明确写出渠道名和原因。详情页补全失败只记「警告」，不影响推送和运行状态。
 - 卡片里图片显示为链接而不是图片：说明没有配置 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`，或应用未发布、缺少 `im:resource` 权限。日志中的「警告: 飞书图片 … 上传失败」会写明原因。
+- 日志出现「`feishu app auth returned code 21001`」：这是飞书侧的安全策略拦截，不是代码或凭据格式问题。检查应用是否已发布并启用、权限是否审核通过、安全设置里是否启用了 IP 白名单（Actions 出口 IP 不固定）；企业账号还需管理员在数据安全策略中放行该应用。此情况会自动降级为图片链接，通知本身不受影响。
 - 核对 Secret 名称是否完全一致。启用邮件时 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASS`、`MAIL_TO` **五项都要配置**，缺一项会在启动时直接失败。
 - 确认 `config.yaml` 的 `notify.channels` 包含预期渠道；当前默认只有 `feishu`，邮件需要手动加 `email`。
 - 飞书：确认机器人仍在群里、Webhook 未失效，并关闭「签名校验」。
