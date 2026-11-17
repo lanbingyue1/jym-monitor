@@ -19,6 +19,9 @@ class Filters:
     servers: tuple[str, ...] = ()
     include_keywords: tuple[str, ...] = ()
     exclude_keywords: tuple[str, ...] = ()
+    # Only notify listings whose detail page reports 「账号转移」= 是.  This
+    # needs the detail page, so the pipeline applies it after enrichment.
+    require_account_transfer: bool = False
 
 
 @dataclass(frozen=True)
@@ -149,8 +152,20 @@ def _parse_site(site_id: str, raw: Any) -> SiteConfig:
                 filters_raw.get("exclude_keywords"),
                 f"sites.{site_id}.filters.exclude_keywords",
             ),
+            require_account_transfer=_as_bool(
+                filters_raw.get("require_account_transfer"),
+                f"sites.{site_id}.filters.require_account_transfer",
+            ),
         ),
     )
+
+
+def _as_bool(value: Any, name: str) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(f"'{name}' must be true or false")
+    return value
 
 
 def _as_tuple(value: Any, name: str) -> tuple[str, ...]:

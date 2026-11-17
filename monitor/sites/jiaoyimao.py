@@ -237,6 +237,7 @@ def _to_safe_report(raw: object) -> SafeReport | None:
     content_raw = content_raw if isinstance(content_raw, dict) else {}
 
     groups: list[str] = []
+    account_transfer = ""
     content_list = content_raw.get("contentList")
     for group in content_list if isinstance(content_list, list) else []:
         if not isinstance(group, dict):
@@ -247,6 +248,8 @@ def _to_safe_report(raw: object) -> SafeReport | None:
                 continue
             text = str(step.get("text") or "").strip()
             status = str(step.get("statusText") or "").strip()
+            if text == "账号转移" and status:
+                account_transfer = status
             if text and status:
                 steps.append(f"{text} {status}")
             elif text:
@@ -262,6 +265,7 @@ def _to_safe_report(raw: object) -> SafeReport | None:
         percent=str(level_raw.get("levelPercentText") or "").strip(),
         note=_plain_text(level_raw.get("descHtml")),
         groups=tuple(groups),
+        account_transfer=account_transfer,
     )
     if not (report.level or report.percent or report.note or report.groups):
         return None

@@ -15,12 +15,17 @@ class SafeReport:
     ``"卖家信用认证：身份证认证 认证通过 / 人脸认证 认证通过"``.  The report is
     only available on the product detail page, so listings fetched from the
     search page carry ``safe_report=None`` until they are enriched.
+
+    ``account_transfer`` is the raw status text of the 「账号转移」step inside
+    「交易安全保障」 (``"是"``/``"否"``, ``""`` when the step is absent).  It is
+    kept structured because the pipeline filters on it.
     """
 
     level: str = ""
     percent: str = ""
     note: str = ""
     groups: tuple[str, ...] = ()
+    account_transfer: str = ""
 
 
 @dataclass(frozen=True)

@@ -68,6 +68,40 @@ def test_parse_detail_report_from_real_fixture():
     assert "卖家风险校验 校验通过" in report.groups[0]
     assert report.groups[1].startswith("交易安全保障：账号转移 是")
     assert "充值包赔 不支持加购" in report.groups[2]
+    assert report.account_transfer == "是"
+
+
+def _detail_html(safe_report):
+    payload = {"pageInitialProps": {"initialData": {"goodsData": {
+        "sortedComponents": [{"itemPageBizViewData": {"safeReport": safe_report}}]
+    }}}}
+    return "<script>window.__INITIAL_DATA__=" + json.dumps(payload) + ";</script>"
+
+
+def _safe_report_with_transfer(status_text):
+    return {
+        "safeLevel": {"level": "SSS", "levelPercentText": "100%"},
+        "safeContent": {"contentList": [{
+            "title": "交易安全保障",
+            "data": [{"text": "账号转移", "statusText": status_text}],
+        }]},
+    }
+
+
+def test_parse_detail_report_reads_account_transfer_no():
+    report = parse_detail_report(_detail_html(_safe_report_with_transfer("否")))
+    assert report is not None and report.account_transfer == "否"
+
+
+def test_parse_detail_report_without_account_transfer_step():
+    report = parse_detail_report(_detail_html({
+        "safeLevel": {"level": "SSS", "levelPercentText": "100%"},
+        "safeContent": {"contentList": [{
+            "title": "交易安全保障",
+            "data": [{"text": "黑号校验", "statusText": "通过"}],
+        }]},
+    }))
+    assert report is not None and report.account_transfer == ""
 
 
 def test_parse_detail_report_without_report_returns_none():

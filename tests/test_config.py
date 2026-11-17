@@ -20,6 +20,7 @@ sites:
       servers: []
       include_keywords: ["血影"]
       exclude_keywords: []
+      require_account_transfer: true
 notify:
   channels: [feishu, email]
   batch_size: 10
@@ -36,6 +37,7 @@ bootstrap:
     assert site.max_pages == 3
     assert site.filters.price_min == 50
     assert site.filters.platforms == ("安卓",)
+    assert site.filters.require_account_transfer is True
     assert cfg.notify.channels == ("feishu", "email")
     assert cfg.bootstrap_notify is True
 
@@ -57,6 +59,24 @@ def test_site_id_comes_from_yaml_key(tmp_path: Path):
     p.write_text("sites:\n  jiaoyimao:\n    urls: [u]\n", encoding="utf-8")
     cfg = load_config(p)
     assert cfg.sites["jiaoyimao"].site_id == "jiaoyimao"
+
+
+def test_require_account_transfer_defaults_to_false(tmp_path: Path):
+    p = tmp_path / "config.yaml"
+    p.write_text("sites:\n  jiaoyimao:\n    urls: [u]\n", encoding="utf-8")
+    assert load_config(p).sites["jiaoyimao"].filters.require_account_transfer is False
+
+
+def test_require_account_transfer_must_be_boolean(tmp_path: Path):
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "sites:\n  jiaoyimao:\n    urls: [u]\n"
+        "    filters:\n      require_account_transfer: 'yes'\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_config(p)
+    assert "require_account_transfer" in str(excinfo.value)
 
 
 def test_unknown_notify_channel_raises_value_error(tmp_path: Path):

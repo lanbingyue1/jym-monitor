@@ -48,8 +48,10 @@ class BrokenStore:
     def save(self, state): raise StateError("disk")
 
 
-def cfg(bootstrap=True, batch_size=10, threshold=3, interval=180):
-    return Config(sites={"jiaoyimao": SiteConfig("jiaoyimao", True, ("u",), 1, Filters())},
+def cfg(bootstrap=True, batch_size=10, threshold=3, interval=180, filters=None):
+    return Config(sites={"jiaoyimao": SiteConfig(
+                      "jiaoyimao", True, ("u",), 1,
+                      Filters() if filters is None else filters)},
                   notify=NotifyConfig(("feishu",), batch_size),
                   alerts=AlertConfig(threshold, interval), bootstrap_notify=bootstrap)
 
@@ -467,13 +469,14 @@ class EnrichingAdapter(FakeAdapter):
         return self.enriched[item.item_id]
 
 
-def _enriched(i):
+def _enriched(i, account_transfer="是"):
     from monitor.models import SafeReport
     return Listing(
         "jiaoyimao", i, f"商品{i}", 100, f"https://x/{i}", NOW,
         {"server": "和之国", "platform": "安卓", "account": "小米帐号"},
         ("https://img.test/a.jpg",),
-        SafeReport("SSS", "100%", "100% 不会被找回", ("卖家信用认证：认证通过",)),
+        SafeReport("SSS", "100%", "100% 不会被找回", ("卖家信用认证：认证通过",),
+                   account_transfer),
     )
 
 
@@ -513,6 +516,51 @@ def test_bootstrap_does_not_fetch_details(tmp_path):
     run_once(cfg(), [adapter], [n], store, now=NOW)
 
     assert adapter.detail_calls == []
+
+
+def test_require_account_transfer_notifies_only_yes(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter(
+        [listing("1"), listing("2"), listing("3"), listing("4")],
+        {"2": _enriched("2"), "3": _enriched("3", account_transfer="否")},
+        fail_ids={"4"},
+    )
+    r = run_once(cfg(filters=Filters(require_account_transfer=True)),
+                 [adapter], [n], store, now=NOW + timedelta(minutes=5))
+
+    assert [x.item_id for x in n.items] == ["2"]
+    assert r.new == 1 and r.notified == 1
+    assert any("账号转移" in w for w in r.warnings)
+    seen = store.load()["sites"]["jiaoyimao"]["seen"]
+    assert {"2", "3", "4"} <= set(seen)
+
+
+def test_require_account_transfer_off_notifies_everything(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter(
+        [listing("1"), listing("2")],
+        {"2": _enriched("2", account_transfer="否")},
+    )
+    r = run_once(cfg(), [adapter], [n], store, now=NOW + timedelta(minutes=5))
+
+    assert [x.item_id for x in n.items] == ["2"] and r.new == 1
+
+
+def test_require_account_transfer_dry_run_warns(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter([listing("1"), listing("2")], {})
+    r = run_once(cfg(filters=Filters(require_account_transfer=True)),
+                 [adapter], [n], store, now=NOW + timedelta(minutes=5),
+                 dry_run=True)
+
+    assert adapter.detail_calls == []
+    assert any("账号转移" in w for w in r.warnings)
 
 
 def test_dry_run_does_not_fetch_details(tmp_path):
