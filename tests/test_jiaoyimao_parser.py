@@ -81,3 +81,40 @@ def test_published_at_rejects_too_old_timestamp():
     assert parse_published_at(
         "1000000000000", now=datetime(2026, 11, 16, tzinfo=timezone.utc)
     ) is None
+
+
+def _price_of(raw):
+    html = _html_with_goods([{
+        "type": 8,
+        "data": {
+            "goodsId": 1793434810016540,
+            "title": "t",
+            "price": raw,
+            "sellPoints": [],
+        },
+    }])
+    return parse_listings(html)[0].price
+
+
+def test_price_integer_is_preserved():
+    assert _price_of(180) == 180
+
+
+def test_price_numeric_string_is_normalized():
+    assert _price_of("180") == 180
+    assert _price_of("180.0") == 180
+
+
+def test_price_integral_float_is_normalized():
+    price = _price_of(180.0)
+    assert price == 180 and type(price) is int
+
+
+def test_price_non_numeric_is_none():
+    assert _price_of("面议") is None
+    assert _price_of(None) is None
+
+
+def test_price_non_integral_number_is_none():
+    assert _price_of("180.5") is None
+    assert _price_of(180.5) is None

@@ -127,7 +127,9 @@ def test_parse_failure_is_fetch_error_and_does_not_use_browser():
     browser_calls = []
 
     def http_fetch(url):
-        return "<html>blocked or broken</html>"
+        # The SSR marker is present, so this is a parse failure rather than an
+        # anti-bot JS shell: the browser must not be involved.
+        return "<script>window.__INITIAL_DATA__ = {broken json}</script>"
 
     a = JiaoyimaoAdapter(
         SiteConfig(
@@ -143,6 +145,64 @@ def test_parse_failure_is_fetch_error_and_does_not_use_browser():
     with pytest.raises(FetchError):
         a.fetch()
     assert browser_calls == []
+
+
+def test_missing_initial_data_falls_back_to_browser_once():
+    browser_calls = []
+
+    def http_fetch(url):
+        # A 200 response that is only the JS shell: valid HTTP, no SSR data.
+        return "<html><body><div id='app'></div></body></html>"
+
+    def browser_fetch(url):
+        browser_calls.append(url)
+        return FIXTURE_HTML
+
+    a = JiaoyimaoAdapter(
+        SiteConfig(
+            site_id="jiaoyimao",
+            enabled=True,
+            urls=(BASE_URL,),
+            max_pages=1,
+            filters=Filters(),
+        ),
+        http_fetch=http_fetch,
+        browser_fetch=browser_fetch,
+    )
+    items = a.fetch()
+
+    assert len(items) == 16
+    assert a.used_browser is True
+    assert browser_calls == [BASE_URL + "?page=1"]
+
+
+def test_missing_initial_data_in_http_and_browser_is_fetch_error():
+    browser_calls = []
+
+    def http_fetch(url):
+        return "<html><body>shell</body></html>"
+
+    def browser_fetch(url):
+        browser_calls.append(url)
+        return "<html><body>still a shell</body></html>"
+
+    a = JiaoyimaoAdapter(
+        SiteConfig(
+            site_id="jiaoyimao",
+            enabled=True,
+            urls=(BASE_URL,),
+            max_pages=1,
+            filters=Filters(),
+        ),
+        http_fetch=http_fetch,
+        browser_fetch=browser_fetch,
+    )
+    with pytest.raises(FetchError, match="page=1") as excinfo:
+        a.fetch()
+
+    assert browser_calls == [BASE_URL + "?page=1"]
+    assert a.used_browser is True
+    assert "INITIAL_DATA" in str(excinfo.value)
 
 
 def test_browser_failure_propagates():

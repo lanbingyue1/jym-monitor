@@ -180,6 +180,27 @@ def _extract_goods_list(html: str) -> list:
     return goods_list
 
 
+def _normalize_price(value: object) -> int | None:
+    """Return *value* as an integer price, or ``None`` when unknown.
+
+    The marketplace intermittently serializes prices as integers, integral
+    floats or numeric strings.  Anything else is treated as an unknown price.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+        return int(number) if number.is_integer() else None
+    return None
+
+
 def _to_listing(data: dict) -> Listing:
     goods_id = str(data["goodsId"])
 
@@ -199,7 +220,7 @@ def _to_listing(data: dict) -> Listing:
         site=SITE,
         item_id=goods_id,
         title=data.get("title") or "",
-        price=data.get("price"),
+        price=_normalize_price(data.get("price")),
         url=data.get("detailUrl") or _DETAIL_URL_TEMPLATE.format(goods_id=goods_id),
         published_at=parse_published_at(goods_id),
         extra=extra,
@@ -284,7 +305,30 @@ class JiaoyimaoAdapter:
 
     def _fetch_page(self, url: str) -> str:
         try:
-            return self.http_fetch(url)
+            html = self.http_fetch(url)
         except FetchError:
-            self.used_browser = True
-            return self.browser_fetch(url)
+            # HTTP was blocked: the existing anti-bot fallback.
+            return self._fetch_with_browser_once(url)
+
+        if _INITIAL_DATA_MARKER in html:
+            return html
+
+        # HTTP returned 200 but only the JS shell: per the anti-bot risk
+        # definition a missing SSR marker is also a risk signal, so try Chrome
+        # exactly once before giving up.
+        return self._fetch_with_browser_once(url)
+
+    def _fetch_with_browser_once(self, url: str) -> str:
+        """Fetch *url* through the browser fallback at most once.
+
+        Shared by both triggers (HTTP failure and a 200 page without SSR data)
+        so ``used_browser`` and the single-attempt rule cannot diverge.
+        """
+        self.used_browser = True
+        html = self.browser_fetch(url)
+        if _INITIAL_DATA_MARKER not in html:
+            raise FetchError(
+                f"could not fetch {url}: "
+                "window.__INITIAL_DATA__ not found in browser response"
+            )
+        return html
