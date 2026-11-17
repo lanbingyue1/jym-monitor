@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import time
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -25,7 +26,10 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _UPLOAD_HINTS = {
     234007: "应用未启用机器人能力，请在「添加应用能力」中启用机器人并发布版本",
 }
-_DOWNLOAD_ATTEMPTS = 2
+_DOWNLOAD_ATTEMPTS = 3
+# The jiaoyimao CDN intermittently refuses connections from overseas runners;
+# this public image proxy fetches the bytes server-side instead.
+_PROXY_URL = "https://wsrv.nl/?url={}"
 _INLINE_IMAGE_LIMIT = 9
 # Uploads are sequential HTTP round-trips; cap the whole card so a large burst
 # of new listings cannot stall the workflow.
@@ -186,6 +190,9 @@ class FeishuImageUploader:
         self.timeout = timeout
         self._token: str | None = None
         self._refresh_at = 0.0
+        # Set once a direct download exhausts its retries; later images in the
+        # same batch then go straight to the proxy instead of stalling again.
+        self._direct_blocked = False
 
     def upload_all(self, urls: tuple[str, ...]) -> list[str]:
         """Return the keys uploaded so far, stopping at the first failure."""
@@ -232,24 +239,27 @@ class FeishuImageUploader:
 
     def _download(self, url: str) -> bytes:
         response = None
-        error = NotifyError("image download failed")
-        for _ in range(_DOWNLOAD_ATTEMPTS):
-            try:
-                response = requests.get(url, timeout=self.timeout)
-                break
-            except (requests.ConnectionError, requests.Timeout) as exc:
-                # The image CDN occasionally drops cross-border connections;
-                # one retry recovers most of these transient timeouts.
-                error = NotifyError(
-                    f"image download failed: {type(exc).__name__}"
+        if not self._direct_blocked:
+            for _ in range(_DOWNLOAD_ATTEMPTS):
+                try:
+                    response = requests.get(url, timeout=self.timeout)
+                    break
+                except (requests.ConnectionError, requests.Timeout):
+                    # The image CDN intermittently drops connections from
+                    # overseas runners; retry, then fall back to a proxy.
+                    response = None
+                except requests.RequestException as exc:
+                    raise NotifyError(
+                        f"image download failed: {type(exc).__name__}"
+                    ) from exc
+            if response is None:
+                self._direct_blocked = True
+                print(
+                    "警告: 图片直连失败，本批次改用图片代理下载",
+                    file=sys.stderr,
                 )
-                response = None
-            except requests.RequestException as exc:
-                raise NotifyError(
-                    f"image download failed: {type(exc).__name__}"
-                ) from exc
         if response is None:
-            raise error
+            response = self._proxy_download(url)
         if not 200 <= response.status_code < 300:
             raise NotifyError(f"image download returned HTTP {response.status_code}")
         content = response.content
@@ -260,6 +270,15 @@ class FeishuImageUploader:
                 f"image exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit"
             )
         return content
+
+    def _proxy_download(self, url: str):
+        proxy = _PROXY_URL.format(quote(url, safe=""))
+        try:
+            return requests.get(proxy, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise NotifyError(
+                f"image proxy download failed: {type(exc).__name__}"
+            ) from exc
 
     def _access_token(self) -> str:
         if self._token is not None and time.monotonic() < self._refresh_at:

@@ -784,6 +784,47 @@ def test_feishu_retries_image_download_after_connect_timeout(monkeypatch):
     assert [e["img_key"] for e in images] == ["img-1"]
 
 
+def test_feishu_downloads_via_proxy_when_direct_times_out(monkeypatch, capsys):
+    direct = []
+    proxied = []
+    sent = {}
+
+    def fake_get(url, timeout=None):
+        if "wsrv.nl" in url:
+            proxied.append(url)
+            return FakeDownload()
+        direct.append(url)
+        raise requests.ConnectTimeout("blocked")
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        if "tenant_access_token" in url:
+            return FakeResponse(
+                payload={"code": 0, "tenant_access_token": "t-1", "expire": 7200}
+            )
+        if "im/v1/images" in url:
+            return FakeResponse(payload={"code": 0, "data": {"image_key": "k"}})
+        sent["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("monitor.notify.feishu.requests.get", fake_get)
+    monkeypatch.setattr("monitor.notify.feishu.requests.post", fake_post)
+
+    FeishuNotifier(
+        "https://hook", app_id="cli_x", app_secret="secret"
+    ).send([RICH])
+
+    # Direct download is attempted once per batch, then every image uses
+    # the proxy instead of stalling on repeated timeouts.
+    assert len(direct) == 3
+    assert len(proxied) == 2
+    assert all("%3A" in url for url in proxied)
+    images = [
+        e for e in sent["json"]["card"]["elements"] if e.get("tag") == "img"
+    ]
+    assert len(images) == 2
+    assert "改用图片代理" in capsys.readouterr().err
+
+
 def test_feishu_app_auth_policy_block_names_the_code_and_hint(monkeypatch, capsys):
     def fake_post(url, json=None, timeout=None, **kwargs):
         if "tenant_access_token" in url:
