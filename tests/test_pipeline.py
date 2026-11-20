@@ -48,11 +48,13 @@ class BrokenStore:
     def save(self, state): raise StateError("disk")
 
 
-def cfg(bootstrap=True, batch_size=10, threshold=3, interval=180, filters=None):
+def cfg(bootstrap=True, batch_size=10, threshold=3, interval=180, filters=None,
+        include_safe_report=True):
     return Config(sites={"jiaoyimao": SiteConfig(
                       "jiaoyimao", True, ("u",), 1,
                       Filters() if filters is None else filters)},
-                  notify=NotifyConfig(("feishu",), batch_size),
+                  notify=NotifyConfig(("feishu",), batch_size,
+                                      include_safe_report=include_safe_report),
                   alerts=AlertConfig(threshold, interval), bootstrap_notify=bootstrap)
 
 
@@ -507,6 +509,37 @@ def test_detail_failure_warns_but_still_notifies(tmp_path):
     assert [x.item_id for x in n.items] == ["2"]
     assert n.items[0].safe_report is None
     assert "2" in store.load()["sites"]["jiaoyimao"]["seen"]
+
+
+def test_details_are_not_fetched_when_safe_report_off(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter(
+        [listing("1"), listing("2")], {"2": _enriched("2")}
+    )
+    r = run_once(cfg(include_safe_report=False), [adapter], [n], store,
+                 now=NOW + timedelta(minutes=5))
+
+    assert adapter.detail_calls == []
+    assert [x.item_id for x in n.items] == ["2"]
+    assert n.items[0].safe_report is None
+    assert r.new == 1 and r.warnings == []
+
+
+def test_details_still_fetched_when_account_transfer_required(tmp_path):
+    store = FileStateStore(tmp_path / "s.json"); n = FakeNotifier()
+    run_once(cfg(), [FakeAdapter([listing("1")])], [n], store, now=NOW)
+
+    adapter = EnrichingAdapter(
+        [listing("1"), listing("2")], {"2": _enriched("2")}
+    )
+    run_once(cfg(filters=Filters(require_account_transfer=True),
+                 include_safe_report=False),
+             [adapter], [n], store, now=NOW + timedelta(minutes=5))
+
+    assert adapter.detail_calls == ["2"]
+    assert [x.item_id for x in n.items] == ["2"]
 
 
 def test_bootstrap_does_not_fetch_details(tmp_path):

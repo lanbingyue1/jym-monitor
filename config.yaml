@@ -2,8 +2,10 @@ sites:
   jiaoyimao:
     enabled: true
     urls:
-      - https://www.jiaoyimao.com/jg1008016/f2161571-c2161572/o110/?rId=107&searchCondition=%7B%22filter_low_quality%22%3A%7B%22conditionList%22%3A%5B%221%22%5D%7D%7D&enforcePlat=2&newPage=true
-    max_pages: 3
+      # 站点已按价格 1000-4000 + 服务保障「帐号转移」筛选；sortId=107 = 最新发布
+      - https://www.jiaoyimao.com/jg1008016/f2161571-c2161572/o110/?rId=107&priceCondition=%7B%22price%22%3A%7B%22statConditionList%22%3A%5B%221000-4000%22%5D%2C%22conditionList%22%3A%5B%221000%2C4000%22%5D%7D%7D&searchCondition=%7B%22filter_low_quality%22%3A%7B%22conditionList%22%3A%5B%221%22%5D%7D%2C%22service_guarantee%22%3A%7B%22statConditionList%22%3A%5B%22%E5%B8%90%E5%8F%B7%E8%BD%AC%E7%A7%BB%22%5D%2C%22conditionList%22%3A%5B%2210005%22%5D%2C%22selectType%22%3A1%2C%22conditionType%22%3A5%7D%7D&enforcePlat=2&newPage=true&sortId=107
+    # 最新发布排序下第一页（16 条）就覆盖两次检查之间的新增，不再翻页
+    max_pages: 1
     filters:
       price_min: 1000        # 价格下限（元，含）；null = 不限
       price_max: 4000        # 价格上限（元，含）；null = 不限
@@ -11,12 +13,12 @@ sites:
       servers: []
       include_keywords: []  # 匹配 title + description + sellPoints
       exclude_keywords: []
-      require_account_transfer: true  # 只要详情页「账号转移 = 是」的商品
+      require_account_transfer: false  # 「账号转移」已在站点筛选里，不再抓详情页
 notify:
   channels: [feishu, email] # 可选 feishu / email，可同时开启；email 需配好 SMTP_* 与 MAIL_TO
   batch_size: 10
   include_images: false     # false = 不加载/不显示商品图片；true = 恢复内联图片
-  include_safe_report: false  # false = 通知里不显示「安全报告」；详情页仍会抓取用于筛选
+  include_safe_report: false  # false = 不抓详情页、通知里也没有「安全报告」
 alerts:
   consecutive_failures_before_alert: 3
   min_alert_interval_minutes: 180

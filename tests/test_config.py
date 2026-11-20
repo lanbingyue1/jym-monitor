@@ -46,6 +46,17 @@ bootstrap:
     assert cfg.bootstrap_notify is True
 
 
+def test_shipped_config_uses_newest_sort_and_single_page():
+    p = Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg = load_config(p)
+    site = cfg.sites["jiaoyimao"]
+    assert site.max_pages == 1
+    assert len(site.urls) == 1
+    assert "sortId=107" in site.urls[0]
+    assert "priceCondition=" in site.urls[0]
+    assert site.filters.require_account_transfer is False
+
+
 def test_minimal_config_uses_defaults(tmp_path: Path):
     p = tmp_path / "config.yaml"
     p.write_text("sites:\n  jiaoyimao:\n    urls: [u]\n", encoding="utf-8")

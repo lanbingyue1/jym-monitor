@@ -11,13 +11,13 @@
 一句话架构：GitHub Actions 定时触发 `python -m monitor`，站点适配器抓取并解析搜索结果页，流水线按「首次运行锚点 + 已见商品 ID」判断新品，经规则过滤后批量通知，最后通过 GitHub Contents API 把 `state.json` 写回 `state` 分支。
 
 - **抓取**：优先普通 HTTP；被反爬页拦截时，降级到 Playwright 驱动的 Google Chrome（`channel="chrome"`）。GitHub 的 Ubuntu runner 已预装 Chrome，因此 workflow 不需要 `playwright install` 步骤。
-- **翻页**：从第 1 页开始，遇到已见商品 ID 或达到 `max_pages`（默认 3）时停止，避免调度延迟期间漏掉新品。
+- **抓取范围**：`config.yaml` 里的地址已经带上站点筛选（价格 1000–4000、服务保障「帐号转移」）和 `sortId=107`（最新发布），只解析第 1 页共 16 条。两次检查之间的新增远少于 16 条，最新发布排序保证它们都在首屏。
 - **首次运行**：登记当前存量商品，只发一条「监控已启动，当前 N 条商品」，不逐条推送。
 - **判新规则**：未见过，且发布时间不早于首次运行时间（`anchor_at`）。这样被擦亮/重新推广的旧商品不会被误报；缺少发布时间的商品会保守提醒。
-- **详情补全**：只对即将推送的新商品抓一次详情页，补上「安全报告」（账号安全等级与各项认证/保障）。详情页抓取失败只记为警告，商品仍按搜索页信息推送；如果开启了 `require_account_transfer`，「账号转移」状态未知的商品会被跳过（不推送）并记录警告。
+- **详情补全**：仅当 `notify.include_safe_report: true` 或 `require_account_transfer: true` 时，才对即将推送的新商品抓详情页（补「安全报告」/ 判「账号转移」）。两者都为 `false` 时不抓详情页。详情页抓取失败只记为警告，商品仍按搜索页信息推送；如果开启了 `require_account_transfer`，「账号转移」状态未知的商品会被跳过（不推送）并记录警告。
 - **通知失败**：某个批次所有渠道都失败时，本次不会为该站点写入已见状态，下一轮会重试（至少一次语义，可能产生少量重复）。
 - **状态提交**：有新商品 ID 或距上次提交超过 24 小时（心跳）时提交一次 `state.json`。每日心跳同时避免仓库因 60 天无活动导致定时任务被 GitHub 停用。
-- **调度**：GitHub 的 `schedule` 是 best-effort，`*/5` 是最小间隔；5–15 分钟是目标而非硬性 SLA，负载高时可能延迟或跳过，下一轮会通过翻页补上。
+- **调度**：GitHub 的 `schedule` 是 best-effort，`*/5` 经常被节流到数小时一次，因此推荐用外部定时器（cron-job.org）每 5 分钟调用一次 `workflow_dispatch`，仓库里的 `cron` 只作兜底。见「外部 5 分钟定时器」。
 
 ## 项目结构
 
@@ -234,12 +234,26 @@ notify:
 | `notify.channels` | `[feishu]` | 通知渠道，可组合 `feishu` / `email`。当前配置为 `[feishu, email]` |
 | `notify.batch_size` | `10` | 单条通知最多包含几件商品，超出会拆批 |
 | `notify.include_images` | `true` | 是否在通知里加载/显示商品图片。`false` 时不下载、不上传、不显示图片（代码保留，改回 `true` 即恢复）。当前为 `false` |
-| `notify.include_safe_report` | `true` | 是否在通知里显示「安全报告」。`false` 时不显示，但详情页仍会抓取（「账号转移」筛选依赖它）。当前为 `false` |
+| `notify.include_safe_report` | `true` | 是否在通知里显示「安全报告」。`false` 且 `require_account_transfer` 也为 `false` 时不抓详情页。当前为 `false` |
 | `alerts.consecutive_failures_before_alert` | `3` | 连续失败多少次后发一次异常告警 |
 | `alerts.min_alert_interval_minutes` | `180` | 同类告警的最小间隔（分钟） |
 | `bootstrap.notify_on_first_run` | `true` | 首次运行是否发送「监控已启动」消息 |
 
-调度频率在 `.github/workflows/monitor.yml` 的 `cron` 中修改。GitHub 定时任务的最小间隔是 5 分钟；workflow 同时保留了 `workflow_dispatch` 手动触发，单次超时 10 分钟，并启用 `concurrency` 防止重叠运行。workflow 已声明 `contents: write` 权限，用于通过 GitHub Contents API 回写 `state` 分支。
+调度频率在 `.github/workflows/monitor.yml` 的 `cron` 中修改。GitHub 定时任务的最小间隔是 5 分钟，但 `schedule` 会被平台节流（实测常变成数小时一次）；workflow 同时保留 `workflow_dispatch` 手动触发，单次超时 10 分钟，并启用 `concurrency` 防止重叠运行。workflow 已声明 `contents: write` 权限，用于通过 GitHub Contents API 回写 `state` 分支。
+
+### 外部 5 分钟定时器（推荐）
+
+GitHub 自己的 `cron` 不可靠，用一个外部定时服务（如免费额度的 [cron-job.org](https://cron-job.org)）每 5 分钟调用一次 `workflow_dispatch`。仓库里的 `*/5` cron 保留着兜底，两者同时触发也不会重叠（`concurrency` 会排队）。
+
+1. GitHub → Settings → Developer settings → **Fine-grained personal access tokens** → Generate new token：只勾选本仓库 `lanbingyue1/jym-monitor`，权限选 **Actions: Read and write**，设置一个到期时间。不要用 classic PAT，也不要把 token 写进仓库或 `config.yaml`。
+2. 在 cron-job.org 新建任务，每 5 分钟执行一次：
+   - 方法：`POST`
+   - URL：`https://api.github.com/repos/lanbingyue1/jym-monitor/actions/workflows/monitor.yml/dispatches`
+   - Header：`Authorization: Bearer <你的细粒度 PAT>`、`Accept: application/vnd.github+json`、`Content-Type: application/json`
+   - Body：`{"ref":"main"}`
+3. 保存后看 cron-job.org 的执行历史：应返回 `204 No Content`。返回 `401` 说明 token 错误或过期，`403` 说明权限没给够，`404` 多半是仓库名或 workflow 文件名写错。
+
+token 只保存在 cron-job.org 的任务配置里；泄露或过期时在 GitHub 撤销并新建一个即可，其他配置不用动。
 
 ## 常见问题
 
@@ -260,7 +274,7 @@ notify:
 
 **定时运行延迟或被跳过**
 
-GitHub 的 `schedule` 是 best-effort：`*/5` 只是最小间隔，平台负载高时会延迟甚至跳过某一轮。5–15 分钟是目标，不是 SLA。漏掉一轮不会丢商品：下一轮会从第 1 页翻到已见 ID，覆盖延迟期间的增量。需要立即检查时可手动执行 `Run workflow`。
+GitHub 的 `schedule` 是 best-effort：`*/5` 只是最小间隔，平台负载高时会延迟甚至跳过某一轮，实测可能变成数小时一次。配好「外部 5 分钟定时器」后以外部触发为准，GitHub cron 只兜底。漏掉一轮不会丢商品：列表按「最新发布」排序，下一轮首屏仍然覆盖延迟期间的新增。需要立即检查时可手动执行 `Run workflow`。
 
 **定时任务在 60 天后被自动停用**
 

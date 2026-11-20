@@ -40,8 +40,8 @@ class NotifyConfig:
     # When off, notifications omit listing images entirely (no inline uploads,
     # no image links).  The image code stays in place for when it is turned on.
     include_images: bool = True
-    # When off, notifications omit the 安全报告 lines.  Detail pages are still
-    # fetched because filters (e.g. 账号转移) may depend on them.
+    # When off, notifications omit the 安全报告 lines and detail pages are not
+    # fetched at all, unless a filter (e.g. 账号转移) needs them.
     include_safe_report: bool = True
 
 

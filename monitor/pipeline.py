@@ -196,7 +196,13 @@ class _Runner:
     ) -> None:
         new_items = [item for item in listings if is_new(item, site_state)]
         actionable = [item for item in new_items if matches(item, site_cfg.filters)]
-        actionable = self._enrich(site_id, adapter, actionable)
+        # Detail pages are only worth fetching when their data reaches the
+        # user (安全报告 shown) or drives a filter (账号转移).
+        if (
+            self.config.notify.include_safe_report
+            or site_cfg.filters.require_account_transfer
+        ):
+            actionable = self._enrich(site_id, adapter, actionable)
         actionable, retry = self._filter_account_transfer(
             site_id, site_cfg.filters.require_account_transfer, actionable
         )
